@@ -44,6 +44,10 @@ class FilterProfile(BaseModel):
 
     price_min: int | None = None
     price_max: int | None = None
+    # Count a garage space that costs extra ("Tiefgaragenplatz um € 18.000")
+    # towards price_min/price_max.
+    price_includes_garage: bool = False
+    monthly_costs_max: float | None = None
     area_min: float | None = None
     area_max: float | None = None
     rooms_min: float | None = None
@@ -53,8 +57,11 @@ class FilterProfile(BaseModel):
     year_built_min: int | None = None
     year_built_max: int | None = None
     building_types: list[BuildingType] | None = None
-    parking: Requirement = "any"
+    parking: Requirement = "any"  # any parking, including outdoor spaces and carports
+    garage: Requirement = "any"  # a covered space: garage or Tiefgarage
     elevator: Requirement = "any"
+    balcony: Requirement = "any"  # balcony, loggia or terrace
+    cellar: Requirement = "any"
     commission_free: Requirement = "any"
     postal_code_prefixes: list[str] | None = None
     exclude_keywords: list[str] = []
@@ -95,13 +102,18 @@ class FilterProfile(BaseModel):
             elif requirement == "excluded" and value:
                 reasons.append(f"has {label}")
 
-        check_range("price", listing.price_eur, self.price_min, self.price_max)
+        price = listing.total_price_eur if self.price_includes_garage else listing.price_eur
+        check_range("price", price, self.price_min, self.price_max)
+        check_range("monthly costs", listing.monthly_costs_eur, None, self.monthly_costs_max)
         check_range("area", listing.area_m2, self.area_min, self.area_max)
         check_range("rooms", listing.rooms, self.rooms_min, self.rooms_max)
         check_range("floor", listing.floor, self.floor_min, self.floor_max)
         check_range("year built", listing.year_built, self.year_built_min, self.year_built_max)
         check_requirement("parking", listing.has_parking, self.parking)
+        check_requirement("garage", listing.has_garage, self.garage)
         check_requirement("elevator", listing.has_elevator, self.elevator)
+        check_requirement("balcony", listing.has_balcony, self.balcony)
+        check_requirement("cellar", listing.has_cellar, self.cellar)
         check_requirement("commission-free", listing.commission_free, self.commission_free)
 
         if self.building_types:

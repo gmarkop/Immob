@@ -4,6 +4,7 @@ import json
 
 import httpx
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from immob import cli
@@ -37,6 +38,8 @@ def runner(monkeypatch, make_client, tmp_path):
 
     client = make_client(handler)
     monkeypatch.setattr(cli, "build_source", lambda profile, _client: WillhabenSource(client))
+    # Tests check content, not layout: a wide console keeps tables from truncating.
+    monkeypatch.setattr(cli, "console", Console(width=160))
     monkeypatch.setenv("IMMOB_DB", str(tmp_path / "test.db"))
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     return CliRunner()

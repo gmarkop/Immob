@@ -50,9 +50,11 @@ so a wrong name means less precise data, not a crash.
 
 ### 2. Edit your profile
 
-`profiles/kaernten.yaml` holds your criteria: price, size, rooms, floor, year
-built, old/new building, parking, elevator, commission, postal codes and words
-to exclude (e.g. *Baurecht*). The comments in the file explain each option.
+`profiles/kaernten.yaml` holds your criteria: price (optionally including a
+garage space that costs extra), monthly costs, size, rooms, floor, year built,
+old/new building, garage (covered: garage or Tiefgarage), any parking, elevator,
+balcony/terrace, cellar, commission, postal codes and words to exclude (e.g.
+*Baurecht*). The comments in the file explain each option.
 
 By default the crawler reads all apartments in Kärnten in willhaben's default
 order, a few pages per run, and filters them on your machine. It's better to
@@ -129,7 +131,7 @@ To run it three times a day with cron (`crontab -e`):
 
 | Command | What it does |
 |---|---|
-| `immob crawl` | Fetch listings, store them, send notifications. `--seed` for the first run, `--no-notify` to skip Telegram, `--pages N`, `--no-details`, `--cache-dir DIR` while developing. |
+| `immob crawl` | Fetch listings, store them, send notifications. `--seed` for the first run, `--no-notify` to skip Telegram, `--pages N`, `--no-details`, `--refresh-details` to re-read detail pages after an update, `--cache-dir DIR` while developing. |
 | `immob search` | Table of stored listings that match the profile. |
 | `immob show ID` | One listing with price history and the filter verdict. `--text` also prints the ad's text, to see where yes/no/? values came from. |
 | `immob notify` | Send pending notifications without crawling. |

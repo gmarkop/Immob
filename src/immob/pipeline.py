@@ -33,7 +33,13 @@ def run_crawl(
     max_pages: int,
     fetch_details: bool = True,
     max_details: int = 25,
+    refresh_details: bool = False,
 ) -> CrawlStats:
+    """Read the source's search pages into the store.
+
+    `refresh_details` re-fetches detail pages already parsed before, e.g. after
+    the parser learned new fields.
+    """
     stats = CrawlStats()
     try:
         for listing in source.search(max_pages):
@@ -47,7 +53,7 @@ def run_crawl(
             if (
                 fetch_details
                 and stats.details_fetched < max_details
-                and not (stored and stored.details_fetched)
+                and (refresh_details or not (stored and stored.details_fetched))
                 and profile.matches(listing, include_unknown=True)
             ):
                 try:

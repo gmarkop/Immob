@@ -72,6 +72,9 @@ def crawl(
     pages: Annotated[int | None, typer.Option(help="Search pages to read.")] = None,
     details: Annotated[bool, typer.Option(help="Fetch detail pages of candidates.")] = True,
     max_details: Annotated[int, typer.Option(help="Detail pages per run, at most.")] = 25,
+    refresh_details: Annotated[
+        bool, typer.Option(help="Re-fetch detail pages fetched before (after an update).")
+    ] = False,
     notify: Annotated[bool, typer.Option(help="Send Telegram notifications.")] = True,
     seed: Annotated[
         bool, typer.Option(help="First run: store everything, mark it as already notified.")
@@ -100,6 +103,7 @@ def crawl(
                 max_pages=pages or profile.willhaben.max_pages,
                 fetch_details=details,
                 max_details=max_details,
+                refresh_details=refresh_details,
             )
         except RobotsDisallowed as exc:
             console.print(f"[red]{exc}[/red]")
@@ -177,7 +181,18 @@ def search(
         ]
 
     table = Table(title=f"{len(listings)} listings matching '{profile.name}'")
-    for column in ("ID", "Price", "m²", "€/m²", "Rooms", "Floor", "Year", "Type", "Park.", "Prov."):
+    for column in (
+        "ID",
+        "Price",
+        "m²",
+        "€/m²",
+        "Rooms",
+        "Floor",
+        "Year",
+        "Type",
+        "Garage",
+        "Prov.",
+    ):
         table.add_column(column, no_wrap=True)
     table.add_column("Place", overflow="ellipsis", no_wrap=True)  # the one column that may shrink
     for listing in listings:
@@ -190,7 +205,7 @@ def search(
             listing.floor_display or "?",
             str(listing.year_built or "?"),
             listing.building_type or "?",
-            _yes_no(listing.has_parking),
+            listing.garage_display,
             _yes_no(None if listing.commission_free is None else not listing.commission_free),
             " ".join(filter(None, [listing.postal_code, listing.location])),
         )
@@ -325,17 +340,26 @@ def _path_to(data: object, target: object, path: str = "") -> str | None:
 
 def _print_listing(listing: StoredListing) -> None:
     console.print(f"[bold]{listing.title}[/bold]\n{listing.url}\n")
+    commission = _yes_no(listing.commission_free)
+    if listing.commission_text:
+        commission += f" ({listing.commission_text})"
     fields = {
         "Price": format_eur(listing.price_eur),
         "Area": f"{_num(listing.area_m2)} m²",
         "Price/m²": format_eur(listing.price_per_m2),
+        "Monthly costs": _eur_cents(listing.monthly_costs_eur, "gross"),
+        "Heating costs": _eur_cents(listing.heating_costs_eur, "net"),
+        "Heating": listing.heating or "?",
         "Rooms": _num(listing.rooms),
         "Floor": listing.floor_display or "?",
         "Year built": listing.year_built or "?",
         "Building": listing.building_type or "?",
-        "Parking": _yes_no(listing.has_parking),
+        "Garage": listing.garage_display,
+        "Parking (any)": _yes_no(listing.has_parking),
         "Lift": _yes_no(listing.has_elevator),
-        "Commission-free": _yes_no(listing.commission_free),
+        "Balcony/terrace": _yes_no(listing.has_balcony),
+        "Cellar": _yes_no(listing.has_cellar),
+        "Commission-free": commission,
         "Private seller": _yes_no(listing.is_private),
         "Place": " ".join(filter(None, [listing.postal_code, listing.location])) or "?",
         "First seen": f"{listing.first_seen:%Y-%m-%d}",
@@ -344,6 +368,10 @@ def _print_listing(listing: StoredListing) -> None:
     }
     for label, value in fields.items():
         console.print(f"  {label:<20}{value}")
+
+
+def _eur_cents(amount: float | None, note: str) -> str:
+    return "?" if amount is None else f"{format_eur(amount, cents=True)} per month ({note})"
 
 
 def _num(value: float | None) -> str:

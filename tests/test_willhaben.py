@@ -300,3 +300,51 @@ def test_search_with_copied_search_url_and_total(make_client):
     assert [u.params["page"] for u in requested] == ["1", "2"]
     assert all(u.params["PRICE_TO"] == "220000" and u.params["sort"] == "1" for u in requested)
     assert source.total_found == 250
+
+
+# The detail page of a real listing (saved October 2026; trimmed, contact
+# details replaced). Its text says there is no lift.
+REAL_DETAIL_WITH_FEE = advert(
+    1141173619,
+    **{
+        "ADDITIONAL_COST/FEE": "3% des Kaufpreises zzgl. 20% USt.",
+        "CONTACT/ADDRESS_STREET": "Beispielstraße 8",
+        "ESTATE_PRICE/HEATINGCOSTSNET": "24,07",
+        "ESTATE_PRICE/MONTHCOSTS_GROSS": "217,85",
+        "ESTATE_SIZE/LIVING_AREA": "45,41",
+        "FREE_AREA/FREE_AREA_TYPE": "Balkon",
+        "FREE_AREA/FREE_AREA_TYPE_AND_AREA": "Balkon 5,61 m²",
+        "GENERAL_TEXT_ADVERT/Flächen": "<ul><li>Kellerfläche: 7.58 m²</li></ul>",
+        "GENERAL_TEXT_ADVERT/Zusatzinformationen": (
+            "<ul><li>Stockwerk: 1. Etage</li><li>Anzahl Badezimmer: 1</li></ul>"
+        ),
+    },
+    CONSTRUCTION_YEAR="2002",
+    DESCRIPTION=(
+        "<p>Diese hervorragend geschnittene Wohnung in der 1. Etage "
+        "(Lift ist keiner vorhanden) bietet Ihnen ein modernes Zuhause.</p>"
+    ),
+    ENERGY_HWB="72",
+    ESTATE_PREFERENCE=["Keller", "Abstellraum"],
+    FLOOR="1",
+    HEATING="Zentralheizung",
+    ISPRIVATE="0",
+    NO_OF_ROOMS="2",
+    PRICE="149900",
+)
+
+
+def test_parse_real_detail_with_fee():
+    listing = parse_advert(REAL_DETAIL_WITH_FEE, fallback_url="https://www.willhaben.at/iad/x")
+
+    assert listing.commission_free is False
+    assert listing.commission_text == "3% des Kaufpreises zzgl. 20% USt."
+    assert listing.year_built == 2002
+    assert listing.floor == 1
+    assert listing.heating == "Zentralheizung"
+    assert listing.heating_costs_eur == 24.07
+    assert listing.monthly_costs_eur == 217.85
+    assert listing.has_balcony is True
+    assert listing.has_cellar is True
+    assert listing.has_elevator is False  # "Lift ist keiner vorhanden"
+    assert listing.has_garage is None  # not mentioned

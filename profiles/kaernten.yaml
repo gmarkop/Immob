@@ -12,9 +12,16 @@ floor_min: 1            # 0 = ground floor (EG); 1 = skip the ground floor
 year_built_min: 1970
 building_types: [neubau, altbau]   # Altbau = built before 1945
 
+# Count a garage space that costs extra towards price_max:
+price_includes_garage: true
+# monthly_costs_max: 250    # €/month incl. VAT: operating costs, repair reserve, ...
+
 # required | excluded | any
-parking: any
+parking: any            # any parking, including outdoor spaces and carports
+garage: required        # a covered space: garage or Tiefgarage
 elevator: any
+balcony: any            # balcony, loggia or terrace
+cellar: any
 commission_free: any
 
 # Austrian postal codes in Carinthia start with 9.
