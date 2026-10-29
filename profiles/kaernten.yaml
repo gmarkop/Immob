@@ -1,0 +1,39 @@
+# Search profile: a small apartment in Carinthia.
+# Every criterion is optional; delete a line to stop filtering on it.
+name: kaernten-small
+
+price_max: 220000
+area_min: 40
+area_max: 80
+rooms_min: 2
+rooms_max: 3
+
+floor_min: 1            # 0 = ground floor (EG); 1 = skip the ground floor
+year_built_min: 1970
+building_types: [neubau, altbau]   # Altbau = built before 1945
+
+# required | excluded | any
+parking: any
+elevator: any
+commission_free: any
+
+# Austrian postal codes in Carinthia start with 9.
+# Klagenfurt is 9020 and around, Villach 9500 and around.
+postal_code_prefixes: ["90", "95"]
+
+# Skip ads mentioning these words (case-insensitive):
+exclude_keywords:
+  - Baurecht            # building lease: the land isn't yours and the lease expires
+  - Anlegerwohnung      # investor flat, often tied to a rental contract
+  - Vorsorgewohnung     # same
+  - Zwangsversteigerung # foreclosure auction: a different buying process
+  - Wohnrecht           # someone keeps the right to live there
+
+# When an ad doesn't state a value you filter on (e.g. no floor given):
+# true keeps it, false drops it.
+include_unknown: true
+
+willhaben:
+  region: kaernten
+  property_type: eigentumswohnung   # condominium apartments for sale
+  max_pages: 3                      # 90 ads per page
