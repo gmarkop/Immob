@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,7 +18,12 @@ from immob.models import StoredListing, format_eur
 from immob.notify import NotifierError, TelegramNotifier
 from immob.pipeline import run_crawl, send_pending
 from immob.sources.base import ParseError, Source
-from immob.sources.willhaben import WillhabenSource, attributes, extract_next_data, find_key
+from immob.sources.willhaben import (
+    WillhabenSource,
+    attributes,
+    extract_next_data,
+    find_adverts,
+)
 from immob.storage import Storage
 
 app = typer.Typer(help="Track apartment listings in Carinthia.", no_args_is_help=True)
@@ -214,6 +220,9 @@ def show(
 def inspect(
     page: Annotated[str, typer.Argument(help="A saved willhaben .html file, or a URL.")],
     index: Annotated[int, typer.Option(help="Which advert of a search page to show.")] = 0,
+    save_json: Annotated[
+        Path | None, typer.Option(help="Also save the page's embedded JSON to this file.")
+    ] = None,
 ) -> None:
     """Print the raw attributes of a willhaben page, to check the field mapping.
 
@@ -233,15 +242,21 @@ def inspect(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from None
 
-    advert = find_key(data, "advertDetails")
-    if advert is None:
-        summaries = find_key(data, "advertSummary") or []
-        if not summaries:
-            console.print("[red]No adverts found in this page.[/red]")
-            raise typer.Exit(1)
-        console.print(f"Search page with {len(summaries)} adverts; showing #{index}.")
-        advert = summaries[index]
+    if save_json:
+        save_json.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        console.print(f"Saved the embedded JSON to {save_json}")
 
+    adverts = find_adverts(data)
+    if not adverts:
+        console.print(
+            "[red]No advert-shaped objects found. This is how the page's data looks:[/red]"
+        )
+        for line in _describe_structure(data):
+            console.print(line, markup=False, highlight=False)
+        raise typer.Exit(1)
+
+    console.print(f"Found {len(adverts)} advert(s); showing #{index}.")
+    advert = adverts[index]
     table = Table(title=f"Advert {advert.get('id')}")
     table.add_column("Attribute")
     table.add_column("Values")
@@ -249,6 +264,49 @@ def inspect(
         table.add_row(name, " | ".join(v[:120] for v in values))
     console.print(table)
     console.print(f"Other keys: {', '.join(k for k in advert if k != 'attributes')}")
+    console.print(f"Path to adverts: {_path_to(data, advert) or '?'}")
+
+
+def _describe_structure(data: object, max_depth: int = 6, max_lines: int = 150) -> list[str]:
+    """An indented outline of nested JSON: keys, list lengths and short values."""
+    lines: list[str] = []
+
+    def walk(node: object, label: str, depth: int) -> None:
+        if len(lines) >= max_lines:
+            return
+        indent = "  " * depth
+        if isinstance(node, dict):
+            lines.append(f"{indent}{label}: {{{len(node)} keys}}")
+            if depth < max_depth:
+                for key, child in node.items():
+                    walk(child, key, depth + 1)
+        elif isinstance(node, list):
+            lines.append(f"{indent}{label}: [{len(node)} items]")
+            if node and depth < max_depth:
+                walk(node[0], "[0]", depth + 1)  # lists are usually uniform: show one item
+        else:
+            lines.append(f"{indent}{label}: {json.dumps(node, ensure_ascii=False)[:60]}")
+
+    walk(data, "(root)", 0)
+    if len(lines) >= max_lines:
+        lines.append(f"... cut at {max_lines} lines; use --save-json to see everything")
+    return lines
+
+
+def _path_to(data: object, target: object, path: str = "") -> str | None:
+    """Where `target` sits inside `data`, e.g. 'props.pageProps.x[0]'."""
+    if data is target:
+        return path
+    if isinstance(data, dict):
+        children = ((f"{path}.{k}" if path else str(k), v) for k, v in data.items())
+    elif isinstance(data, list):
+        children = ((f"{path}[{i}]", v) for i, v in enumerate(data))
+    else:
+        return None
+    for child_path, child in children:
+        if (found := _path_to(child, target, child_path)) is not None:
+            return found
+    return None
 
 
 def _print_listing(listing: StoredListing) -> None:

@@ -139,6 +139,30 @@ def find_key(data: Any, key: str) -> Any:
     return None
 
 
+def find_adverts(data: Any) -> list[dict[str, Any]]:
+    """Every advert-shaped object in the data, wherever it sits.
+
+    An advert is recognized by its shape ({"attributes": {"attribute": [...]}})
+    rather than by the key it is stored under, so renamed keys don't hide it.
+    """
+    found: list[dict[str, Any]] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            attrs = node.get("attributes")
+            if isinstance(attrs, dict) and isinstance(attrs.get("attribute"), list):
+                found.append(node)
+                return
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(data)
+    return found
+
+
 def attributes(advert: dict[str, Any]) -> dict[str, list[str]]:
     """willhaben's attribute list as a {name: values} dict."""
     items = (advert.get("attributes") or {}).get("attribute") or []

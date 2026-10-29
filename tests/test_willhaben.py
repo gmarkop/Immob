@@ -4,7 +4,13 @@ import pytest
 from immob.http import RobotsDisallowed
 from immob.models import BuildingType
 from immob.sources.base import ParseError
-from immob.sources.willhaben import WillhabenSource, extract_next_data, find_key, parse_advert
+from immob.sources.willhaben import (
+    WillhabenSource,
+    extract_next_data,
+    find_adverts,
+    find_key,
+    parse_advert,
+)
 from tests.conftest import advert, detail_page, search_page
 
 KLAGENFURT_AD = advert(
@@ -138,3 +144,9 @@ def test_fetch_details_merges_detail_data(make_client):
     assert merged.year_built == 1998
     assert merged.has_parking is True
     assert merged.commission_free is False
+
+
+def test_find_adverts_ignores_key_names():
+    data = {"props": {"renamed": {"items": [advert(1), {"nested": advert(2)}]}, "other": [1, 2]}}
+    assert [ad["id"] for ad in find_adverts(data)] == ["1", "2"]
+    assert find_adverts({"props": {"nothing": "here"}}) == []
