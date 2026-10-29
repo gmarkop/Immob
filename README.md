@@ -5,9 +5,10 @@ It reads listings from willhaben.at, stores them in a local SQLite database,
 filters them with your criteria and sends new matches and price drops to
 Telegram.
 
-> **Status: Phase 1.** The willhaben search-page parser has been checked
-> against a real saved page. The detail-page fields (year built, etc.) are not
-> verified yet (see [Verify the willhaben mapping](#1-verify-the-willhaben-mapping)).
+> **Status: Phase 1.** The willhaben parser has been checked against real saved
+> search and listing pages. Not yet seen on a real page: dedicated fields for
+> year built and building type, so for now those come from the description text
+> (see [Verify the willhaben mapping](#1-verify-the-willhaben-mapping)).
 
 ## Quick start
 

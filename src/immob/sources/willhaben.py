@@ -10,8 +10,9 @@ Adverts carry their data as a list of attributes:
         {"name": "PRICE", "values": ["189000"]},
         {"name": "NUMBER_OF_ROOMS", "values": ["3"]}, ...]}}
 
-The search-page attribute names in ATTRIBUTE_NAMES were checked against a real
-willhaben page (October 2026); detail-page-only names are still unverified.
+The attribute names in ATTRIBUTE_NAMES were checked against real willhaben
+search and detail pages (October 2026), except year built and building type,
+which the sample ad didn't have.
 Check them with `immob inspect` on a saved page (reload it with F5 before
 saving: willhaben navigates client-side, which leaves the embedded JSON of the
 first page you opened). Whatever the structured attributes miss is filled in
@@ -43,7 +44,9 @@ log = logging.getLogger(__name__)
 
 BASE_URL = "https://www.willhaben.at"
 
-# Candidate attribute names for each field, tried in order.
+# Candidate attribute names for each field, tried in order. Search and detail
+# pages sometimes differ: NUMBER_OF_ROOMS vs NO_OF_ROOMS, BODY_DYN vs DESCRIPTION.
+# Detail pages have no POSTCODE; CONTACT/ADDRESS_POSTCODE there is the agent's.
 ATTRIBUTE_NAMES: dict[str, tuple[str, ...]] = {
     "title": ("HEADING",),
     "description": ("BODY_DYN", "DESCRIPTION"),
@@ -52,6 +55,7 @@ ATTRIBUTE_NAMES: dict[str, tuple[str, ...]] = {
     "area": ("ESTATE_SIZE/LIVING_AREA", "ESTATE_SIZE/USEABLE_AREA", "ESTATE_SIZE"),
     "rooms": ("NUMBER_OF_ROOMS", "NO_OF_ROOMS"),  # not ROOMS: that's a code like "2X2"
     "floor": ("FLOOR",),
+    # Not seen on a real page yet; the description text is the fallback.
     "year_built": ("CONSTRUCTION_YEAR", "YEAR_OF_CONSTRUCTION", "BUILDING_YEAR"),
     "building_type": ("BUILDING_TYPE", "BUILDING_CONDITION"),
     "postal_code": ("POSTCODE",),
@@ -71,6 +75,10 @@ _NOT_TEXT = {
     "PUBLISHED",
     "PUBLISHED_String",
 }
+# The advertiser's contact details describe the agent's office, not the
+# apartment: CONTACT/ADDRESS_POSTCODE is where the agent sits.
+_NOT_TEXT_PREFIXES = ("CONTACT/", "IMPORT_")
+_SECTION_PREFIX = "GENERAL_TEXT_ADVERT/"
 
 
 class WillhabenSource(Source):
@@ -115,13 +123,19 @@ class WillhabenSource(Source):
         details = find_key(extract_next_data(page_html), "advertDetails")
         if not isinstance(details, dict):
             raise ParseError(f"no advertDetails in __NEXT_DATA__ of {listing.url}")
-        detailed = parse_advert(details, fallback_url=listing.url)
 
-        # Detail data wins where it has a value; the summary fills the rest.
+        # Merge structured fields first (detail page beats search page), and only
+        # then guess from text, so a guess never overrides real data. E.g. the
+        # detail page has no FLOOR, and "Fahrradraum im EG" in its text mustn't
+        # replace the FLOOR the search page sent.
+        summary, summary_text = (
+            _parse_structured(listing.raw) if listing.raw else (listing, listing.search_text)
+        )
+        detailed, detail_text = _parse_structured(details, fallback_url=listing.url)
         known = {k: v for k, v in detailed.model_dump().items() if v not in (None, "")}
-        known["details_fetched"] = True
-        merged = listing.model_copy(update=known)
-        merged.raw = detailed.raw
+        merged = summary.model_copy(update=known | {"details_fetched": True})
+        merged = fill_from_text(merged, f"{detail_text}\n{summary_text}")
+        merged.raw = details
         return merged
 
 
@@ -185,6 +199,14 @@ def attributes(advert: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def parse_advert(advert: dict[str, Any], fallback_url: str | None = None) -> Listing:
+    listing, text = _parse_structured(advert, fallback_url)
+    return fill_from_text(listing, text)
+
+
+def _parse_structured(
+    advert: dict[str, Any], fallback_url: str | None = None
+) -> tuple[Listing, str]:
+    """The listing from structured attributes only, plus all its text for extraction."""
     attrs = attributes(advert)
 
     def first(field: str) -> str | None:
@@ -219,17 +241,42 @@ def parse_advert(advert: dict[str, Any], fallback_url: str | None = None) -> Lis
         building_type=extract_building_type(building_type_text) if building_type_text else None,
         postal_code=first("postal_code"),
         location=first("location"),
-        description=_clean_html(first("description")),
+        description=_description(first("description"), attrs),
         is_private=None if is_private is None else is_private == "1",
         raw=advert,
     )
 
-    # Feature lists (e.g. "Garage", "Lift") often live in other attributes, so
-    # search those values too, not just title and description.
+    # Feature lists (e.g. ESTATE_PREFERENCE: "Keller", "Fahrstuhl") and property
+    # types ("Erdgeschoßwohnung") live in other attributes, so search those too.
     extra = " ".join(
-        value for name, values in attrs.items() if name not in _NOT_TEXT for value in values
+        _clean_html(value) or ""
+        for name, values in attrs.items()
+        if _is_property_text(name)
+        for value in values
     )
-    return fill_from_text(listing, f"{listing.search_text}\n{extra}")
+    return listing, f"{listing.search_text}\n{extra}"
+
+
+def _description(main: str | None, attrs: dict[str, list[str]]) -> str | None:
+    """The description plus the detail page's text sections ("Ausstattung", "Lage", ...).
+
+    The sections often hold the facts we look for, such as the commission in
+    "Preis - Detailinformation", so they're kept with the listing.
+    """
+    parts = [_clean_html(main)]
+    for name, values in attrs.items():
+        if name.startswith(_SECTION_PREFIX):
+            heading = name.removeprefix(_SECTION_PREFIX)
+            parts.append(f"{heading}: {_clean_html(' '.join(values))}")
+    return "\n\n".join(part for part in parts if part) or None
+
+
+def _is_property_text(name: str) -> bool:
+    return (
+        name not in _NOT_TEXT
+        and name not in ATTRIBUTE_NAMES["description"]  # already in the description
+        and not name.startswith((_SECTION_PREFIX, *_NOT_TEXT_PREFIXES))
+    )
 
 
 def _parse_floor(value: str | None) -> tuple[int | None, str | None]:
@@ -245,4 +292,5 @@ def _clean_html(text: str | None) -> str | None:
     """Descriptions may contain HTML such as <br />; keep plain text only."""
     if text is None:
         return None
-    return html.unescape(re.sub(r"<[^>]+>", " ", text)).strip()
+    plain = html.unescape(re.sub(r"<[^>]+>", " ", text))
+    return re.sub(r"\s+", " ", plain).strip()

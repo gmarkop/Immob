@@ -217,3 +217,68 @@ def test_parse_floor_values():
     assert parse_advert(advert(1, FLOOR="0")).floor == 0
     assert parse_advert(advert(1, FLOOR="-1")).floor == -1
     assert parse_advert(advert(1, FLOOR="Dachgeschoss")).floor_label == "DG"
+
+
+# A real detail page's attributes (saved page, October 2026; trimmed, contact
+# details replaced). The search page for the same ad would carry POSTCODE/FLOOR.
+REAL_DETAIL_AD = advert(
+    2042839941,
+    **{
+        "CONTACT/ADDRESS_POSTCODE": "9020",  # the agent's office, not the flat
+        "CONTACT/ADDRESS_STREET": "Garagenweg 1",  # agent's street: no parking signal
+        "CONTACT/COMPANY": "Beispiel Immobilien GmbH",
+        "ESTATE_PRICE/PRICE_SUGGESTION": "674700",
+        "ESTATE_SIZE/LIVING_AREA": "65,18",
+        "GENERAL_TEXT_ADVERT/Ausstattung": (
+            "<ul><li>Modernes Design</li><li>Fußbodenheizung</li></ul>"
+        ),
+        "GENERAL_TEXT_ADVERT/Preis - Detailinformation": (
+            "<ul><li>Kaufpreis pro m²: 10351,33 Eur</li><li>Provisionsfrei</li></ul>"
+        ),
+        "LOCATION/ADDRESS_2": "Pörtschach am Wörther See",
+    },
+    DESCRIPTION="LIVING LAKE<br> Der besondere Lebensstil am Wörthersee.<br><br>",
+    ESTATE_PREFERENCE=["Keller", "Fahrstuhl", "Abstellraum"],
+    HEATING="Fernwärme",
+    ISPRIVATE="0",
+    NO_OF_ROOMS="3",
+    PRICE="674700",
+    PROPERTY_TYPE="Erdgeschoßwohnung",
+)
+REAL_DETAIL_AD["description"] = "LIVING LAKE - Gartenwohnung am Wörthersee"
+
+
+def test_parse_real_detail_advert():
+    listing = parse_advert(REAL_DETAIL_AD, fallback_url="https://www.willhaben.at/iad/x")
+
+    assert listing.title == "LIVING LAKE - Gartenwohnung am Wörthersee"
+    assert listing.area_m2 == 65.18
+    assert listing.rooms == 3
+    assert listing.postal_code is None  # not the agent's 9020
+    assert listing.has_elevator is True  # "Fahrstuhl" in ESTATE_PREFERENCE
+    assert listing.has_parking is None  # not fooled by the agent's street name
+    assert (listing.floor, listing.floor_label) == (0, "EG")  # from PROPERTY_TYPE
+    assert listing.commission_free is True  # from the price section
+    assert listing.description == (
+        "LIVING LAKE Der besondere Lebensstil am Wörthersee.\n\n"
+        "Ausstattung: Modernes Design Fußbodenheizung\n\n"
+        "Preis - Detailinformation: Kaufpreis pro m²: 10351,33 Eur Provisionsfrei"
+    )
+
+
+def test_fetch_details_structured_data_beats_text_guesses(make_client):
+    summary = parse_advert(
+        advert(7, HEADING="Wohnung", FLOOR="2", POSTCODE="9210", SEO_URL="immobilien/d/w-7/")
+    )
+    details = advert(7, DESCRIPTION="Fahrradraum im EG. Baujahr 2019.", NO_OF_ROOMS="2")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=detail_page(details))
+
+    merged = WillhabenSource(make_client(handler)).fetch_details(summary)
+
+    assert merged.floor == 2  # the search page's FLOOR, not "EG" from the text
+    assert merged.postal_code == "9210"
+    assert merged.rooms == 2  # from the detail page
+    assert merged.year_built == 2019  # gap filled from the detail text
+    assert merged.raw == details
