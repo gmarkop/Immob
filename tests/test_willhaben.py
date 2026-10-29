@@ -150,3 +150,70 @@ def test_find_adverts_ignores_key_names():
     data = {"props": {"renamed": {"items": [advert(1), {"nested": advert(2)}]}, "other": [1, 2]}}
     assert [ad["id"] for ad in find_adverts(data)] == ["1", "2"]
     assert find_adverts({"props": {"nothing": "here"}}) == []
+
+
+# Attributes as willhaben really sends them on a search page (from a saved page,
+# October 2026; long values trimmed).
+REAL_SEARCH_AD = advert(
+    858253157,
+    ADID="858253157",
+    BODY_DYN="Attraktive Kapitalanlage in gefragter Lage von Klagenfurt Waidmannsdorf",
+    COORDINATES="46.614105,14.26903635",
+    DISTRICT="Klagenfurt",
+    ESTATE_PREFERENCE="15, 23, 250, 27",
+    **{
+        "ESTATE_PRICE/PRICE_SUGGESTION": "232000.0",
+        "ESTATE_SIZE/LIVING_AREA": "54",
+        "PRICE/SQUARE_METER": "4296.2964",
+    },
+    ESTATE_SIZE="54",
+    FLOOR="1",
+    FREE_AREA_TYPE_NAME="Balkon",
+    HEADING="INVESTMENT IN WAIDMANNSDORF: VERMIETET BIS 2027 INKL. TIEFGARAGENSTELLPLATZ",
+    ISPRIVATE="0",
+    LOCATION="Klagenfurt",
+    NUMBER_OF_ROOMS="2",
+    POSTCODE="9020",
+    PRICE="232000",
+    PRICE_FOR_DISPLAY="€ 232.000",
+    PROPERTY_TYPE="Wohnung",
+    PUBLISHED="1793281645575",
+    PUBLISHED_String="2026-10-29T14:47:25Z",
+    ROOMS="2X2",
+    SEO_URL="immobilien/d/eigentumswohnung/kaernten/klagenfurt/investment-in-waidmannsdorf-858253157/",
+    STATE="Kärnten",
+)
+
+
+def test_parse_real_search_advert():
+    listing = parse_advert(REAL_SEARCH_AD)
+
+    assert listing.source_id == "858253157"
+    assert listing.price_eur == 232000
+    assert listing.area_m2 == 54
+    assert listing.rooms == 2  # from NUMBER_OF_ROOMS, not the "2X2" code
+    assert (listing.floor, listing.floor_display) == (1, "1. OG")
+    assert listing.postal_code == "9020"
+    assert listing.location == "Klagenfurt"
+    assert listing.is_private is False
+    assert listing.has_parking is True  # "TIEFGARAGENSTELLPLATZ" in the heading
+    assert listing.year_built is None  # "BIS 2027" is not a construction year
+    assert listing.url.startswith("https://www.willhaben.at/iad/immobilien/d/eigentumswohnung/")
+
+
+def test_search_pages_smaller_than_requested(make_client):
+    """We ask for 90 per page; if the site sends 30, keep paging until rowsFound."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params["page"])
+        ids = range((page - 1) * 30, min(page * 30, 70))
+        return httpx.Response(200, text=search_page([advert(i) for i in ids], rows_found=70))
+
+    source = WillhabenSource(make_client(handler), rows=90)
+    assert len(list(source.search(max_pages=5))) == 70
+
+
+def test_parse_floor_values():
+    assert parse_advert(advert(1, FLOOR="0")).floor == 0
+    assert parse_advert(advert(1, FLOOR="-1")).floor == -1
+    assert parse_advert(advert(1, FLOOR="Dachgeschoss")).floor_label == "DG"

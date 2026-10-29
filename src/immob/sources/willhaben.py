@@ -10,10 +10,12 @@ Adverts carry their data as a list of attributes:
         {"name": "PRICE", "values": ["189000"]},
         {"name": "NUMBER_OF_ROOMS", "values": ["3"]}, ...]}}
 
-The attribute names in ATTRIBUTE_NAMES below could not be checked against the
-live site when this was written. Verify them with `immob inspect` on a saved
-willhaben page and adjust the lists if needed. Whatever the structured
-attributes miss is filled in from the description text (see extract.py).
+The search-page attribute names in ATTRIBUTE_NAMES were checked against a real
+willhaben page (October 2026); detail-page-only names are still unverified.
+Check them with `immob inspect` on a saved page (reload it with F5 before
+saving: willhaben navigates client-side, which leaves the embedded JSON of the
+first page you opened). Whatever the structured attributes miss is filled in
+from the description text (see extract.py).
 """
 
 from __future__ import annotations
@@ -48,7 +50,7 @@ ATTRIBUTE_NAMES: dict[str, tuple[str, ...]] = {
     "price": ("PRICE",),
     "price_display": ("PRICE_FOR_DISPLAY",),
     "area": ("ESTATE_SIZE/LIVING_AREA", "ESTATE_SIZE/USEABLE_AREA", "ESTATE_SIZE"),
-    "rooms": ("NUMBER_OF_ROOMS", "NO_OF_ROOMS", "ROOMS"),
+    "rooms": ("NUMBER_OF_ROOMS", "NO_OF_ROOMS"),  # not ROOMS: that's a code like "2X2"
     "floor": ("FLOOR",),
     "year_built": ("CONSTRUCTION_YEAR", "YEAR_OF_CONSTRUCTION", "BUILDING_YEAR"),
     "building_type": ("BUILDING_TYPE", "BUILDING_CONDITION"),
@@ -58,7 +60,17 @@ ATTRIBUTE_NAMES: dict[str, tuple[str, ...]] = {
     "is_private": ("ISPRIVATE",),
 }
 # Attributes whose values are not prose and would confuse the text extraction.
-_NOT_TEXT = {"SEO_URL", "COORDINATES", "MMO", "ALL_IMAGE_URLS", "PUBLISHED", "PUBLISHED_String"}
+# (ESTATE_PREFERENCE holds numeric feature codes such as "15, 23, 250", whose
+# meaning is unknown so far; numbers can't match the German keywords anyway.)
+_NOT_TEXT = {
+    "SEO_URL",
+    "COORDINATES",
+    "MMO",
+    "ALL_IMAGE_URLS",
+    "AD_SEARCHRESULT_LOGO",
+    "PUBLISHED",
+    "PUBLISHED_String",
+}
 
 
 class WillhabenSource(Source):
@@ -77,6 +89,7 @@ class WillhabenSource(Source):
         self._rows = rows
 
     def search(self, max_pages: int) -> Iterator[Listing]:
+        seen = 0
         for page in range(1, max_pages + 1):
             page_html = self._client.get_text(self.search_url, {"rows": self._rows, "page": page})
             result = find_key(extract_next_data(page_html), "searchResult")
@@ -91,8 +104,10 @@ class WillhabenSource(Source):
                     # One odd advert shouldn't stop the whole crawl.
                     log.warning("skipping unparseable advert %s: %s", advert.get("id"), exc)
 
-            rows_found = int(result.get("rowsFound") or 0)
-            if len(adverts) < self._rows or page * self._rows >= rows_found:
+            # Count what actually arrived rather than trusting our `rows` request:
+            # the site may serve fewer per page than asked for.
+            seen += len(adverts)
+            if not adverts or seen >= int(result.get("rowsFound") or 0):
                 break
 
     def fetch_details(self, listing: Listing) -> Listing:
@@ -220,10 +235,10 @@ def parse_advert(advert: dict[str, Any], fallback_url: str | None = None) -> Lis
 def _parse_floor(value: str | None) -> tuple[int | None, str | None]:
     if value is None:
         return None, None
-    if value.strip().isdigit():
-        floor = int(value)
-        return floor, None
-    return extract_floor(value)
+    try:
+        return int(value), None  # willhaben sends plain numbers, e.g. "1"
+    except ValueError:
+        return extract_floor(value)
 
 
 def _clean_html(text: str | None) -> str | None:
