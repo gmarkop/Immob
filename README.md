@@ -99,17 +99,21 @@ or not, which helps when tuning the filters.
 2. Send any message to your new bot.
 3. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser and find
    `"chat":{"id": ...}`. That number is your **chat id**.
-4. Store both in a file outside the repository, e.g. `~/.config/immob.env`:
+4. Store both in a file outside the repository, `~/.config/immob.env`, as plain
+   `KEY=value` lines (no `export`, no quotes), so both the shell and systemd
+   can read it:
 
-   ```bash
-   export TELEGRAM_BOT_TOKEN="123456:ABC..."
-   export TELEGRAM_CHAT_ID="987654321"
+   ```
+   TELEGRAM_BOT_TOKEN=123456:ABC...
+   TELEGRAM_CHAT_ID=987654321
    ```
 
-5. Test it:
+   Then make it readable only by you: `chmod 600 ~/.config/immob.env`.
+
+5. Test it. `set -a` exports the variables the file defines, so `immob` sees them:
 
    ```bash
-   . ~/.config/immob.env && uv run immob telegram-test
+   set -a && . ~/.config/immob.env && set +a && uv run immob telegram-test
    ```
 
 The bot token gives full control of the bot: never commit it (`.env` files are
@@ -117,15 +121,97 @@ already in `.gitignore`).
 
 ### 5. Run it regularly
 
+See [Run on a server](#run-on-a-server): a machine that's always on runs the
+crawl on a schedule and alerts you on Telegram when a run fails.
+
+## Run on a server
+
+A Linux machine that's always on (e.g. a Debian box at home) can run immob on a
+schedule with a systemd timer. Requests then come from a home connection, and
+the database stays on that machine.
+
+**1. Install uv and immob.** No clone is needed: uv installs the `immob` command
+straight from GitHub.
+
 ```bash
-. ~/.config/immob.env && uv run immob crawl
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-To run it three times a day with cron (`crontab -e`):
+```bash
+uv tool install git+https://github.com/gmarkop/Immob
+```
 
+For a private repository, give the machine a read-only
+[deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys)
+and install with `uv tool install git+ssh://git@github.com/gmarkop/Immob.git`
+(or a `Host` alias from `~/.ssh/config` in place of `github.com`).
+
+**2. A data folder** for the profile and the database. Copy your profile (and
+`immob.db`, to keep its history) there:
+
+```bash
+mkdir -p ~/immob/profiles
 ```
-0 7,13,19 * * * cd $HOME/Immob && . $HOME/.config/immob.env && $HOME/.local/bin/uv run immob crawl >> crawl.log 2>&1
+
+**3. Telegram settings** in `~/.config/immob.env`, as in
+[Set up Telegram](#4-set-up-telegram) (plain `KEY=value` lines, `chmod 600`).
+
+**4. Seed** the database once, so the first scheduled run doesn't notify you
+about every existing listing:
+
+```bash
+cd ~/immob && immob crawl --seed
 ```
+
+**5. Install the systemd units.** This writes three files to
+`~/.config/systemd/user/` with this machine's paths filled in:
+
+```bash
+cd ~/immob && immob install-service
+```
+
+- `immob.service` runs `immob crawl` in `~/immob`.
+- `immob.timer` starts it at 07:00, 13:00 and 19:00 local time, plus a random
+  delay of up to 15 minutes. Change the times with
+  `--calendar "*-*-* 08,18:00"` (systemd's
+  [OnCalendar](https://www.freedesktop.org/software/systemd/man/latest/systemd.time.html#Calendar%20Events)
+  syntax).
+- `immob-failure.service` runs when a crawl fails (including when willhaben's
+  pages change and the search can't be read) and sends a Telegram alert with
+  the last log lines. Without it, a broken crawler and a quiet market both look
+  like silence.
+
+**6. Enable the timer.** `enable-linger` lets your user's timers run while
+you're logged out:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+```bash
+systemctl --user daemon-reload && systemctl --user enable --now immob.timer
+```
+
+Run once now and read the log:
+
+```bash
+systemctl --user start immob.service; journalctl --user -u immob -n 20 --no-pager
+```
+
+To test the alert path, run `immob alert "test alert"` in `~/immob` after
+loading the env file (as in step 5 of the Telegram setup).
+
+**Day to day:**
+
+| What | Command |
+|---|---|
+| Did the last run work? | `journalctl --user -u immob -n 20 --no-pager` |
+| When is the next run? | `systemctl --user list-timers immob.timer` |
+| Current matches | `cd ~/immob && immob search` |
+| Update immob | `uv tool upgrade immob` |
+
+After an update that changes the unit files, run `immob install-service` and
+`systemctl --user daemon-reload` again.
 
 ## Commands
 
@@ -136,6 +222,8 @@ To run it three times a day with cron (`crontab -e`):
 | `immob show ID` | One listing with price history and the filter verdict. `--text` also prints the ad's text, to see where yes/no/? values came from. |
 | `immob notify` | Send pending notifications without crawling. |
 | `immob telegram-test` | Check the Telegram setup. |
+| `immob alert MESSAGE` | Send an alert to Telegram; text piped in (e.g. log lines) is attached. |
+| `immob install-service` | Write systemd units for scheduled runs with failure alerts; see [Run on a server](#run-on-a-server). |
 | `immob inspect FILE_OR_URL` | Dump a willhaben page's raw attributes. |
 
 All commands take `--profile` (default `profiles/kaernten.yaml`, or set
@@ -191,7 +279,7 @@ built in `tests/conftest.py`.
 
 - **Phase 2:** more sources (ImmoScout24, derStandard, Kleine Zeitung,
   edikte.justiz.gv.at), duplicate detection across portals.
-- **Phase 3:** run on a schedule in the cloud (GitHub Actions).
+- **Phase 3 (done):** scheduled runs with failure alerts, via a systemd timer on an always-on machine.
 - **Phase 4:** Streamlit dashboard with a map, € per m² by district and a
   full purchase-cost calculator (property transfer tax, land registry fee,
   notary, commission).

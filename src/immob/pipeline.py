@@ -23,6 +23,8 @@ class CrawlStats:
     details_fetched: int = 0
     errors: int = 0
     total_found: int | None = None  # what the site reports for the whole search
+    # The search itself failed (not just a detail page): the site may have changed.
+    search_failed: bool = False
 
 
 def run_crawl(
@@ -72,6 +74,7 @@ def run_crawl(
         # Keep what was collected so far; the next run picks up the rest.
         log.error("crawl of %s stopped early: %s", source.name, exc)
         stats.errors += 1
+        stats.search_failed = True
     stats.total_found = source.total_found
     return stats
 
