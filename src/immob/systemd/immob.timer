@@ -1,0 +1,14 @@
+# Written by `immob install-service`, which fills in the paths and schedule.
+[Unit]
+Description=Run immob on a schedule
+
+[Timer]
+# Times are in the machine's local time zone.
+OnCalendar=${calendar}
+# Start up to 15 minutes later, so requests don't hit the site at the same minute every day.
+RandomizedDelaySec=15min
+# Catch up on runs missed while the machine was off.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

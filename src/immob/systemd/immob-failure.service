@@ -1,0 +1,10 @@
+# Written by `immob install-service`, which fills in the paths and schedule.
+[Unit]
+Description=immob: report a failed crawl via Telegram
+
+[Service]
+Type=oneshot
+WorkingDirectory=${workdir}
+EnvironmentFile=%h/.config/immob.env
+# The last log lines of the failed run go along with the alert. %H is the hostname.
+ExecStart=/bin/sh -c 'journalctl --user -u immob.service -n 15 --no-pager -o cat | ${exec} alert "immob failed on %H"'

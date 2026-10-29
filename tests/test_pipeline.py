@@ -9,7 +9,7 @@ from immob.filters import FilterProfile
 from immob.models import Listing
 from immob.notify import TelegramNotifier
 from immob.pipeline import run_crawl, send_pending
-from immob.sources.base import Source
+from immob.sources.base import ParseError, Source
 from immob.storage import Storage
 
 
@@ -93,3 +93,15 @@ def test_refresh_details_refetches_known_listings(store):
 
     run_crawl(source, store, FilterProfile(), max_pages=1, refresh_details=True)
     assert source.detail_requests == ["a"]
+
+
+def test_failed_search_is_reported(store):
+    class BrokenSource(FakeSource):
+        def search(self, max_pages: int) -> Iterator[Listing]:
+            yield make("a", 150000)
+            raise ParseError("no __NEXT_DATA__ script in page")
+
+    stats = run_crawl(BrokenSource([]), store, FilterProfile(), max_pages=1)
+
+    assert stats.search_failed
+    assert store.get("fake", "a") is not None  # what arrived before the failure is kept

@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import sys
 from datetime import UTC, datetime, timedelta
+from html import escape
+from importlib import resources
 from pathlib import Path
+from string import Template
 from typing import Annotated
 
 import typer
@@ -125,6 +130,12 @@ def crawl(
         elif notifier:
             _send_notifications(store, profile, notifier)
 
+    if stats.search_failed:
+        # A non-zero exit code makes systemd count the run as failed, which
+        # triggers the failure alert (see `immob install-service`).
+        console.print("[red]The search failed; see the log above.[/red]")
+        raise typer.Exit(1)
+
 
 @app.command()
 def notify(profile_path: ProfileOption = DEFAULT_PROFILE, db: DbOption = DEFAULT_DB) -> None:
@@ -160,6 +171,80 @@ def telegram_test() -> None:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from None
     console.print("Sent. Check Telegram.")
+
+
+@app.command()
+def alert(
+    message: Annotated[str, typer.Argument(help="The alert's headline.")],
+) -> None:
+    """Send an alert to Telegram, with any text piped in (e.g. log lines) attached.
+
+    Used by the systemd failure unit: journalctl ... | immob alert "immob failed".
+    """
+    # Piped text arrives on stdin; on an interactive terminal there is none to read.
+    details = "" if sys.stdin.isatty() else sys.stdin.read().strip()
+    text = f"⚠️ <b>{escape(message)}</b>"
+    if details:
+        # Telegram allows 4096 characters; the end of a log matters most.
+        text += f"\n<pre>{escape(details[-3000:])}</pre>"
+    try:
+        with TelegramNotifier.from_env() as notifier:
+            notifier.send(text)
+    except NotifierError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+
+
+UNIT_FILES = ("immob.service", "immob.timer", "immob-failure.service")
+
+
+@app.command("install-service")
+def install_service(
+    data_dir: Annotated[
+        Path, typer.Option(help="Folder with profiles/ and immob.db; the service runs here.")
+    ] = Path("."),
+    calendar: Annotated[
+        str, typer.Option(help="When to run, in systemd's OnCalendar syntax (local time).")
+    ] = "*-*-* 07,13,19:00",
+    unit_dir: Annotated[
+        Path | None,
+        typer.Option(help="Where to write the unit files [default: ~/.config/systemd/user]."),
+    ] = None,
+) -> None:
+    """Write systemd user units that run `immob crawl` on a schedule and alert on failure.
+
+    Secrets stay out of the units: they read TELEGRAM_BOT_TOKEN and
+    TELEGRAM_CHAT_ID from ~/.config/immob.env.
+    """
+    # The path this command was started from, e.g. ~/.local/bin/immob. Not
+    # resolved: uv's symlink there keeps working across `uv tool upgrade`.
+    executable = shutil.which("immob") or sys.argv[0]
+    values = {
+        "exec": str(Path(executable).absolute()),
+        "workdir": str(data_dir.expanduser().absolute()),
+        "calendar": calendar,
+    }
+    unit_dir = unit_dir or Path.home() / ".config/systemd/user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    for name in UNIT_FILES:
+        template = resources.files("immob.systemd").joinpath(name).read_text(encoding="utf-8")
+        (unit_dir / name).write_text(Template(template).substitute(values), encoding="utf-8")
+        console.print(f"Wrote {unit_dir / name}")
+
+    workdir = Path(values["workdir"])
+    if not (workdir / DEFAULT_PROFILE).exists():
+        console.print(f"[yellow]No profile at {workdir / DEFAULT_PROFILE} yet.[/yellow]")
+    if not (Path.home() / ".config/immob.env").exists():
+        console.print("[yellow]~/.config/immob.env doesn't exist yet (Telegram settings).[/yellow]")
+    console.print(
+        "\nNext:\n"
+        "  sudo loginctl enable-linger $USER     # run timers while you're logged out\n"
+        "  systemctl --user daemon-reload\n"
+        "  systemctl --user enable --now immob.timer\n"
+        "  systemctl --user start immob.service  # one run now, to test",
+        markup=False,
+        highlight=False,
+    )
 
 
 @app.command()

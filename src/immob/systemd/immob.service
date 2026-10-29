@@ -1,0 +1,11 @@
+# Written by `immob install-service`, which fills in the paths and schedule.
+[Unit]
+Description=immob: crawl willhaben and send Telegram notifications
+# When a run fails, immob-failure.service sends a Telegram alert.
+OnFailure=immob-failure.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=${workdir}
+EnvironmentFile=%h/.config/immob.env
+ExecStart=${exec} crawl

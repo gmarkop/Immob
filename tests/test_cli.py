@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from immob import cli
 from immob.filters import FilterProfile
+from immob.notify import TelegramNotifier
 from immob.sources.willhaben import WillhabenSource
 from tests.conftest import advert, detail_page, next_data_page, search_page
 
@@ -108,3 +109,78 @@ def test_build_source_uses_search_url_from_profile(make_client):
     url = "https://www.willhaben.at/iad/immobilien/eigentumswohnung/kaernten?sort=1"
     profile = FilterProfile.model_validate({"willhaben": {"search_url": url}})
     assert cli.build_source(profile, make_client(lambda r: None)).search_url == url
+
+
+def _capturing_notifier(monkeypatch) -> list[dict]:
+    """Make TelegramNotifier.from_env() return a notifier whose messages we record."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True})
+
+    notifier = TelegramNotifier(
+        "t", "1", transport=httpx.MockTransport(handler), sleep=lambda _: None
+    )
+    monkeypatch.setattr(TelegramNotifier, "from_env", classmethod(lambda cls: notifier))
+    return sent
+
+
+def test_alert_sends_headline_and_piped_log(monkeypatch):
+    sent = _capturing_notifier(monkeypatch)
+    log = "crawl of willhaben stopped early: no <searchResult>\n" + "x" * 5000
+
+    result = CliRunner().invoke(cli.app, ["alert", "immob failed on debian"], input=log)
+
+    assert result.exit_code == 0, result.output
+    text = sent[0]["text"]
+    assert text.startswith("⚠️ <b>immob failed on debian</b>\n<pre>")
+    assert len(text) < 4096  # Telegram's limit: only the end of a long log is kept
+    assert text.endswith("x</pre>")
+
+
+def test_alert_escapes_html(monkeypatch):
+    sent = _capturing_notifier(monkeypatch)
+    CliRunner().invoke(cli.app, ["alert", "a <b> & c"], input="<error>")
+    assert sent[0]["text"] == "⚠️ <b>a &lt;b&gt; &amp; c</b>\n<pre>&lt;error&gt;</pre>"
+
+
+def test_install_service_writes_units(tmp_path):
+    data, units = tmp_path / "data", tmp_path / "units"
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "install-service",
+            "--data-dir",
+            str(data),
+            "--unit-dir",
+            str(units),
+            "--calendar",
+            "*-*-* 08:30",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    service = (units / "immob.service").read_text()
+    assert f"WorkingDirectory={data}" in service
+    assert "OnFailure=immob-failure.service" in service
+    assert service.count("ExecStart=/") == 1 and service.rstrip().endswith("immob crawl")
+    assert "OnCalendar=*-*-* 08:30" in (units / "immob.timer").read_text()
+    failure = (units / "immob-failure.service").read_text()
+    assert 'alert "immob failed on %H"' in failure
+    for name in ("immob.service", "immob.timer", "immob-failure.service"):
+        assert "${" not in (units / name).read_text()  # every placeholder filled in
+
+
+def test_crawl_exits_with_error_when_search_fails(monkeypatch, make_client, tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>a redesigned page</html>")
+
+    client = make_client(handler)
+    monkeypatch.setattr(cli, "build_source", lambda profile, _client: WillhabenSource(client))
+    monkeypatch.setenv("IMMOB_DB", str(tmp_path / "test.db"))
+
+    result = CliRunner().invoke(cli.app, ["crawl", "--no-notify"])
+
+    assert result.exit_code == 1  # so systemd counts the run as failed and alerts
+    assert "The search failed" in result.output
