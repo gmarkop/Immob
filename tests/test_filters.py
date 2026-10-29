@@ -70,3 +70,27 @@ def test_postal_codes_may_be_written_as_numbers(tmp_path):
 def test_example_profile_loads():
     profile = load_profile(Path("profiles/kaernten.yaml"))
     assert profile.willhaben.region == "kaernten"
+
+
+def test_search_url_must_be_a_willhaben_search():
+    url = "https://www.willhaben.at/iad/immobilien/eigentumswohnung/kaernten?sort=1"
+    assert FilterProfile.model_validate({"willhaben": {"search_url": url}}).willhaben.search_url
+    with pytest.raises(ValidationError, match="willhaben real-estate search"):
+        FilterProfile.model_validate({"willhaben": {"search_url": "https://example.com/"}})
+
+
+def test_garage_balcony_cellar_and_monthly_costs():
+    profile = FilterProfile(garage="required", balcony="required", monthly_costs_max=250)
+    assert profile.matches(listing(has_garage=True, has_balcony=True, monthly_costs_eur=217.85))
+    assert profile.rejections(
+        listing(has_garage=False, has_balcony=False, monthly_costs_eur=300)
+    ) == ["monthly costs 300 > 250", "no garage", "no balcony"]
+    assert not FilterProfile(cellar="required").matches(listing(has_cellar=False))
+
+
+def test_price_can_include_an_extra_cost_garage():
+    flat = listing(price_eur=210000, has_garage=True, garage_price_eur=18000)
+    assert FilterProfile(price_max=220000).matches(flat)
+    assert not FilterProfile(price_max=220000, price_includes_garage=True).matches(flat)
+    included = listing(price_eur=210000, has_garage=True, garage_price_eur=0)
+    assert FilterProfile(price_max=220000, price_includes_garage=True).matches(included)

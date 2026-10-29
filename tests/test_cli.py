@@ -4,9 +4,11 @@ import json
 
 import httpx
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from immob import cli
+from immob.filters import FilterProfile
 from immob.sources.willhaben import WillhabenSource
 from tests.conftest import advert, detail_page, next_data_page, search_page
 
@@ -36,6 +38,8 @@ def runner(monkeypatch, make_client, tmp_path):
 
     client = make_client(handler)
     monkeypatch.setattr(cli, "build_source", lambda profile, _client: WillhabenSource(client))
+    # Tests check content, not layout: a wide console keeps tables from truncating.
+    monkeypatch.setattr(cli, "console", Console(width=160))
     monkeypatch.setenv("IMMOB_DB", str(tmp_path / "test.db"))
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     return CliRunner()
@@ -44,7 +48,7 @@ def runner(monkeypatch, make_client, tmp_path):
 def test_crawl_search_show(runner):
     result = runner.invoke(cli.app, ["crawl", "--no-notify"])
     assert result.exit_code == 0, result.output
-    assert "Seen 2 listings: 2 new" in result.output
+    assert "Seen 2 of 2 listings found: 2 new" in result.output
     assert "1 detail pages fetched" in result.output  # the penthouse is too expensive
 
     result = runner.invoke(cli.app, ["search"])
@@ -91,3 +95,16 @@ def test_inspect_without_adverts_shows_structure_and_saves_json(runner, tmp_path
     assert "    results: {2 keys}" in result.output
     assert "      hits: [1 items]" in result.output
     assert json.loads(saved.read_text())["props"]["pageProps"]["results"]["total"] == 3
+
+
+def test_show_text_prints_the_ad_text(runner):
+    runner.invoke(cli.app, ["crawl", "--no-notify"])
+    result = runner.invoke(cli.app, ["show", "1", "--text"])
+    assert result.exit_code == 0, result.output
+    assert "Mit Tiefgaragenplatz." in result.output
+
+
+def test_build_source_uses_search_url_from_profile(make_client):
+    url = "https://www.willhaben.at/iad/immobilien/eigentumswohnung/kaernten?sort=1"
+    profile = FilterProfile.model_validate({"willhaben": {"search_url": url}})
+    assert cli.build_source(profile, make_client(lambda r: None)).search_url == url

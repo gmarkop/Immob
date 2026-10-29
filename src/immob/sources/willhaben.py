@@ -31,9 +31,13 @@ from typing import Any
 from selectolax.lexbor import LexborHTMLParser
 
 from immob.extract import (
+    extract_balcony,
     extract_building_type,
+    extract_cellar,
+    extract_elevator,
     extract_floor,
     fill_from_text,
+    parse_commission_fee,
     parse_number,
 )
 from immob.http import PoliteClient
@@ -62,7 +66,16 @@ ATTRIBUTE_NAMES: dict[str, tuple[str, ...]] = {
     "location": ("LOCATION", "DISTRICT"),
     "seo_url": ("SEO_URL",),
     "is_private": ("ISPRIVATE",),
+    "heating": ("HEATING",),
+    "heating_costs": ("ESTATE_PRICE/HEATINGCOSTSNET",),
+    "monthly_costs": ("ESTATE_PRICE/MONTHCOSTS_GROSS",),
+    # The commission ("Maklerprovision" on the page), e.g. "3% des Kaufpreises zzgl. 20% USt."
+    "commission": ("ADDITIONAL_COST/FEE",),
 }
+# Attributes holding lists of names: features ("Keller", "Fahrstuhl"; numeric
+# codes on search pages) and outdoor areas ("Balkon", "Garten").
+_FEATURE_LISTS = ("ESTATE_PREFERENCE",)
+_OUTDOOR_AREAS = ("FREE_AREA/FREE_AREA_TYPE", "FREE_AREA_TYPE_NAME")
 # Attributes whose values are not prose and would confuse the text extraction.
 # (ESTATE_PREFERENCE holds numeric feature codes such as "15, 23, 250", whose
 # meaning is unknown so far; numbers can't match the German keywords anyway.)
@@ -90,10 +103,13 @@ class WillhabenSource(Source):
         *,
         region: str = "kaernten",
         property_type: str = "eigentumswohnung",
+        search_url: str | None = None,
         rows: int = 90,
     ) -> None:
+        """`search_url`, if given, is a search copied from the browser (with its
+        filters and sort order) and replaces `region` and `property_type`."""
         self._client = client
-        self.search_url = f"{BASE_URL}/iad/immobilien/{property_type}/{region}"
+        self.search_url = search_url or f"{BASE_URL}/iad/immobilien/{property_type}/{region}"
         self._rows = rows
 
     def search(self, max_pages: int) -> Iterator[Listing]:
@@ -115,7 +131,8 @@ class WillhabenSource(Source):
             # Count what actually arrived rather than trusting our `rows` request:
             # the site may serve fewer per page than asked for.
             seen += len(adverts)
-            if not adverts or seen >= int(result.get("rowsFound") or 0):
+            self.total_found = int(result.get("rowsFound") or 0)
+            if not adverts or seen >= self.total_found:
                 break
 
     def fetch_details(self, listing: Listing) -> Listing:
@@ -226,6 +243,9 @@ def _parse_structured(
     year = parse_number(first("year_built"))
     building_type_text = first("building_type")
     is_private = first("is_private")
+    commission = first("commission")
+    features = " ".join(v for name in _FEATURE_LISTS for v in attrs.get(name, []))
+    outdoor = " ".join(v for name in _OUTDOOR_AREAS for v in attrs.get(name, []))
 
     listing = Listing(
         source=WillhabenSource.name,
@@ -243,6 +263,15 @@ def _parse_structured(
         location=first("location"),
         description=_description(first("description"), attrs),
         is_private=None if is_private is None else is_private == "1",
+        heating=first("heating"),
+        heating_costs_eur=parse_number(first("heating_costs")),
+        monthly_costs_eur=parse_number(first("monthly_costs")),
+        commission_text=commission,
+        commission_free=parse_commission_fee(commission) if commission else None,
+        # Only a listed feature counts as structured: its absence proves nothing.
+        has_elevator=extract_elevator(features) or None,
+        has_cellar=extract_cellar(features) or None,
+        has_balcony=extract_balcony(outdoor) or None,
         raw=advert,
     )
 

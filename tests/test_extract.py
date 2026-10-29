@@ -1,13 +1,19 @@
 import pytest
 
 from immob.extract import (
+    extract_balcony,
     extract_building_type,
+    extract_cellar,
     extract_commission_free,
     extract_elevator,
     extract_floor,
+    extract_garage,
+    extract_garage_price,
+    extract_heating,
     extract_parking,
     extract_year_built,
     fill_from_text,
+    parse_commission_fee,
     parse_number,
 )
 from immob.models import BuildingType, Listing
@@ -145,3 +151,117 @@ def test_fill_from_text_only_fills_gaps():
 def test_fill_from_text_private_seller_is_commission_free():
     assert fill_from_text(_listing(is_private=True)).commission_free is True
     assert fill_from_text(_listing(is_private=False)).commission_free is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Stockwerk: 1", (1, None)),
+        ("Stockwerk: 1. Etage", (1, "1. OG")),
+        ("Anzahl Stockwerke: 4", (None, None)),  # the building's height, not the floor
+    ],
+)
+def test_extract_floor_labeled(text, expected):
+    assert extract_floor(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "in der 1. Etage (Lift ist keiner vorhanden)",  # from a real willhaben ad
+        "Lift: nein",
+        "Aufzug nicht vorhanden",
+        "keinen Aufzug",
+    ],
+)
+def test_elevator_negations(text):
+    assert extract_elevator(text) is False
+
+
+@pytest.mark.parametrize(
+    ("text", "garage", "parking"),
+    [
+        ("Tiefgaragenplatz", True, True),
+        ("Garagenbox im Hof", True, True),
+        ("TG-Platz vorhanden", True, True),
+        ("Carport", None, True),  # parking, but not a covered garage
+        ("PKW-Stellplatz im Freien", None, True),
+        ("Fahrradgarage", None, None),  # for bikes
+        ("keine Garage", False, False),
+        ("Garage: nein", False, False),
+        ("Tiefgaragenplatz nicht im Kaufpreis enthalten", True, True),  # exists, costs extra
+    ],
+)
+def test_extract_garage_vs_parking(text, garage, parking):
+    assert extract_garage(text) == garage
+    assert extract_parking(text) == parking
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Tiefgaragenplatz um € 18.000 erwerbbar", 18000),
+        ("TG-Platz: € 15.000,-", 15000),
+        ("Garagenplatz kann um 22.000,- Euro gekauft werden", 22000),
+        ("Tiefgaragenstellplatz optional um EUR 25000", 25000),
+        ("inkl. Tiefgaragenplatz", 0),
+        ("INVESTMENT: VERMIETET BIS 2027 INKL. TIEFGARAGENSTELLPLATZ", 0),
+        ("Der Tiefgaragenplatz ist im Kaufpreis inkludiert.", 0),
+        ("Tiefgaragenplatz nicht im Kaufpreis enthalten", None),  # extra, amount unknown
+        ("zzgl. Tiefgaragenplatz", None),
+        ("Tiefgarage vorhanden. Kaufpreis € 250.000", None),  # different sentence
+        ("Garage € 80 monatlich", None),  # a rent, not a purchase price
+    ],
+)
+def test_extract_garage_price(text, expected):
+    assert extract_garage_price(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Südbalkon", True),
+        ("Balkonanzahl:1", True),
+        ("Loggia mit Blick", True),
+        ("Dachterrasse", True),
+        ("Gemeinschaftsterrasse im Hof", None),  # shared, not the flat's own
+        ("kein Balkon", False),
+    ],
+)
+def test_extract_balcony(text, expected):
+    assert extract_balcony(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("Kellerabteil", True), ("Kellerfläche: 7.58 m²", True), ("Keller: nein", False)],
+)
+def test_extract_cellar(text, expected):
+    assert extract_cellar(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Heizung: Gas", "Gas"),
+        ("Beheizt mit Fernwärme", "Fernwärme"),
+        ("Luftwärmepumpe und Fußbodenheizung", "Luftwärmepumpe"),
+        ("Fußbodenheizung", None),  # how heat is distributed, not where it comes from
+    ],
+)
+def test_extract_heating(text, expected):
+    assert extract_heating(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("fee", "expected"),
+    [
+        ("3% des Kaufpreises zzgl. 20% USt.", False),  # real ADDITIONAL_COST/FEE value
+        ("€ 4.500,- inkl. USt.", False),
+        ("0 %", True),
+        ("provisionsfrei", True),
+        ("lt. Vereinbarung", None),
+    ],
+)
+def test_parse_commission_fee(fee, expected):
+    assert parse_commission_fee(fee) == expected

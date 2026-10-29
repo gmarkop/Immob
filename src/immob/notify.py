@@ -107,10 +107,17 @@ def format_listing(listing: StoredListing) -> str:
         facts.append(f"Bj. {listing.year_built}")
 
     features = [
-        _feature("Parking", listing.has_parking),
+        _garage_feature(listing),
+        _feature("Balkon", listing.has_balcony),
+        _feature("Keller", listing.has_cellar),
         _feature("Lift", listing.has_elevator),
         _feature("Provisionsfrei", listing.commission_free),
     ]
+    costs = []
+    if listing.monthly_costs_eur:
+        costs.append(f"{format_eur(listing.monthly_costs_eur)}/Monat")
+    if listing.heating:
+        costs.append(f"Heizung: {listing.heating}")
     if listing.building_type:
         features.insert(0, listing.building_type.value.capitalize())
 
@@ -119,10 +126,22 @@ def format_listing(listing: StoredListing) -> str:
         headline,
         f'<a href="{escape(listing.url)}">{escape(listing.title)}</a>',
         escape(" · ".join(facts)),
+        escape(" · ".join(costs)),
         escape(place),
         escape(" · ".join(f for f in features if f)),
     ]
     return "\n".join(line for line in lines if line)
+
+
+def _garage_feature(listing: StoredListing) -> str | None:
+    """ "Garage ✓", "Garage ✓ (+€ 18.000)", "Garage ✓ (incl.)" or "Garage ✗"."""
+    if listing.has_garage is None:
+        return None
+    if not listing.has_garage:
+        return "Garage ✗"
+    if listing.garage_price_eur is None:
+        return "Garage ✓"
+    return f"Garage ✓ ({listing.garage_display})"
 
 
 def _feature(label: str, value: bool | None) -> str | None:

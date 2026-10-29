@@ -25,12 +25,24 @@ def stored(**fields) -> StoredListing:
 
 
 def test_format_new_listing_escapes_html():
-    text = format_listing(stored(rooms=3, floor=2, has_parking=True, postal_code="9020"))
+    text = format_listing(
+        stored(
+            rooms=3,
+            floor=2,
+            has_garage=True,
+            garage_price_eur=18000,
+            has_balcony=True,
+            monthly_costs_eur=217.85,
+            heating="Fernwärme",
+            postal_code="9020",
+        )
+    )
     assert text.startswith("🏠 <b>New listing</b>")
     assert "3 Zimmer &lt;Balkon&gt; &amp; Garage" in text
     assert 'href="https://www.willhaben.at/iad/x?a=1&amp;b=2"' in text
     assert "€ 189.000 · 63 m² · € 3.000/m² · 3 Zi. · 2. OG" in text
-    assert "Parking ✓" in text
+    assert "Garage ✓ (+€ 18.000) · Balkon ✓" in text
+    assert "€ 218/Monat · Heizung: Fernwärme" in text
 
 
 def test_format_price_drop():

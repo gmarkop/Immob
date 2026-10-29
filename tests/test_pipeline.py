@@ -84,3 +84,12 @@ def test_send_pending_only_matching_and_marks_them(store):
     assert send_pending(store, profile, notifier) == 1
     assert len(sent_texts) == 1
     assert send_pending(store, profile, notifier) == 0  # not sent twice
+
+
+def test_refresh_details_refetches_known_listings(store):
+    source = FakeSource([make("a", 150000)])
+    run_crawl(source, store, FilterProfile(), max_pages=1)
+    source.detail_requests.clear()
+
+    run_crawl(source, store, FilterProfile(), max_pages=1, refresh_details=True)
+    assert source.detail_requests == ["a"]

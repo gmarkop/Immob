@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -70,3 +71,38 @@ def test_pending_notifications_new_and_price_drops(store):
 
     store.mark_notified(pending[0])
     assert store.pending_notifications() == []
+
+
+def test_every_listing_field_has_a_column(store):
+    columns = {row["name"] for row in store._conn.execute("PRAGMA table_info(listings)")}
+    assert set(Listing.model_fields) - {"raw"} <= columns
+
+
+def test_old_database_gets_new_columns(tmp_path):
+    """A database created before has_garage & co. existed is upgraded on open."""
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        """
+        CREATE TABLE listings (
+            source TEXT NOT NULL, source_id TEXT NOT NULL, url TEXT NOT NULL,
+            title TEXT NOT NULL, price_eur INTEGER, area_m2 REAL, rooms REAL,
+            floor INTEGER, floor_label TEXT, year_built INTEGER, building_type TEXT,
+            has_parking INTEGER, has_elevator INTEGER, commission_free INTEGER,
+            postal_code TEXT, location TEXT, description TEXT, is_private INTEGER,
+            details_fetched INTEGER NOT NULL DEFAULT 0, raw_json TEXT,
+            first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
+            notified_price INTEGER, notified_at TEXT,
+            PRIMARY KEY (source, source_id)
+        );
+        INSERT INTO listings (source, source_id, url, title, price_eur, first_seen, last_seen)
+        VALUES ('willhaben', '1', 'https://example.com/1', 'Alt', 150000,
+                '2026-10-01T00:00:00+00:00', '2026-10-01T00:00:00+00:00');
+        """
+    )
+    old.close()
+
+    with Storage(path) as storage:
+        assert storage.get("willhaben", "1").has_garage is None  # old row still readable
+        storage.upsert(listing("1", has_garage=True, garage_price_eur=18000))
+        assert storage.get("willhaben", "1").garage_price_eur == 18000

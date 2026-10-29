@@ -28,8 +28,16 @@ CREATE TABLE IF NOT EXISTS listings (
     year_built      INTEGER,
     building_type   TEXT,
     has_parking     INTEGER,
+    has_garage      INTEGER,
+    garage_price_eur INTEGER,
     has_elevator    INTEGER,
+    has_balcony     INTEGER,
+    has_cellar      INTEGER,
+    heating         TEXT,
+    heating_costs_eur REAL,
+    monthly_costs_eur REAL,
     commission_free INTEGER,
+    commission_text TEXT,
     postal_code     TEXT,
     location        TEXT,
     description     TEXT,
@@ -51,6 +59,19 @@ CREATE TABLE IF NOT EXISTS price_history (
     FOREIGN KEY (source, source_id) REFERENCES listings (source, source_id)
 );
 """
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS leaves an
+# existing table alone, so databases created earlier get these via ALTER TABLE.
+_ADDED_COLUMNS = {
+    "has_garage": "INTEGER",
+    "garage_price_eur": "INTEGER",
+    "has_balcony": "INTEGER",
+    "has_cellar": "INTEGER",
+    "heating": "TEXT",
+    "heating_costs_eur": "REAL",
+    "monthly_costs_eur": "REAL",
+    "commission_text": "TEXT",
+}
 
 # Listing fields stored as plain columns. Column names come from our own model,
 # never from user input, so building SQL from them with f-strings is safe; all
@@ -78,6 +99,15 @@ class Storage:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Bring a database created by an older version up to the current schema."""
+        existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(listings)")}
+        with self._conn:
+            for column, sql_type in _ADDED_COLUMNS.items():
+                if column not in existing:
+                    self._conn.execute(f"ALTER TABLE listings ADD COLUMN {column} {sql_type}")
 
     def __enter__(self) -> Storage:
         return self
