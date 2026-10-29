@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from immob.models import BuildingType, Listing
 
@@ -22,7 +22,18 @@ class WillhabenSettings(BaseModel):
 
     region: str = "kaernten"
     property_type: str = "eigentumswohnung"
+    # A search copied from the browser's address bar, with willhaben's own
+    # filters and sort order. When set, region and property_type are ignored.
+    search_url: str | None = None
     max_pages: int = 3
+
+    @field_validator("search_url")
+    @classmethod
+    def _is_willhaben_search(cls, url: str | None) -> str | None:
+        prefix = "https://www.willhaben.at/iad/immobilien/"
+        if url is not None and not url.startswith(prefix):
+            raise ValueError(f"must be a willhaben real-estate search starting with {prefix}")
+        return url
 
 
 class FilterProfile(BaseModel):

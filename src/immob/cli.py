@@ -49,7 +49,12 @@ def main(verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False) -> N
 
 def build_source(profile: FilterProfile, client: PoliteClient) -> Source:
     settings = profile.willhaben
-    return WillhabenSource(client, region=settings.region, property_type=settings.property_type)
+    return WillhabenSource(
+        client,
+        region=settings.region,
+        property_type=settings.property_type,
+        search_url=settings.search_url,
+    )
 
 
 def _load_profile(path: Path) -> FilterProfile:
@@ -100,8 +105,11 @@ def crawl(
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from None
 
+        seen = f"Seen {stats.seen} listings"
+        if stats.total_found is not None:
+            seen = f"Seen {stats.seen} of {stats.total_found} listings found"
         console.print(
-            f"Seen {stats.seen} listings: {stats.new} new, {stats.price_changed} price changes, "
+            f"{seen}: {stats.new} new, {stats.price_changed} price changes, "
             f"{stats.details_fetched} detail pages fetched."
         )
         if stats.errors:
@@ -195,6 +203,7 @@ def show(
     source: str = WillhabenSource.name,
     profile_path: ProfileOption = DEFAULT_PROFILE,
     db: DbOption = DEFAULT_DB,
+    text: Annotated[bool, typer.Option("--text", help="Also print the ad's text.")] = False,
 ) -> None:
     """Show one listing, its price history and why it does or doesn't match."""
     profile = _load_profile(profile_path)
@@ -206,6 +215,11 @@ def show(
         history = store.price_history(source, source_id)
 
     _print_listing(listing)
+    if text:
+        # The text the yes/no/? fields were extracted from (markup=False: ad
+        # text may contain [brackets] that rich would read as formatting).
+        console.print("\n[bold]Text[/bold]")
+        console.print(listing.description or "(none)", markup=False, highlight=False)
     console.print("\n[bold]Price history[/bold]")
     for seen_at, price in history:
         console.print(f"  {seen_at:%Y-%m-%d %H:%M}  {format_eur(price)}")

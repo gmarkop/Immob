@@ -22,6 +22,7 @@ class CrawlStats:
     price_changed: int = 0
     details_fetched: int = 0
     errors: int = 0
+    total_found: int | None = None  # what the site reports for the whole search
 
 
 def run_crawl(
@@ -65,6 +66,7 @@ def run_crawl(
         # Keep what was collected so far; the next run picks up the rest.
         log.error("crawl of %s stopped early: %s", source.name, exc)
         stats.errors += 1
+    stats.total_found = source.total_found
     return stats
 
 

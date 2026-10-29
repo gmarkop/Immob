@@ -90,10 +90,13 @@ class WillhabenSource(Source):
         *,
         region: str = "kaernten",
         property_type: str = "eigentumswohnung",
+        search_url: str | None = None,
         rows: int = 90,
     ) -> None:
+        """`search_url`, if given, is a search copied from the browser (with its
+        filters and sort order) and replaces `region` and `property_type`."""
         self._client = client
-        self.search_url = f"{BASE_URL}/iad/immobilien/{property_type}/{region}"
+        self.search_url = search_url or f"{BASE_URL}/iad/immobilien/{property_type}/{region}"
         self._rows = rows
 
     def search(self, max_pages: int) -> Iterator[Listing]:
@@ -115,7 +118,8 @@ class WillhabenSource(Source):
             # Count what actually arrived rather than trusting our `rows` request:
             # the site may serve fewer per page than asked for.
             seen += len(adverts)
-            if not adverts or seen >= int(result.get("rowsFound") or 0):
+            self.total_found = int(result.get("rowsFound") or 0)
+            if not adverts or seen >= self.total_found:
                 break
 
     def fetch_details(self, listing: Listing) -> Listing:

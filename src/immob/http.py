@@ -67,7 +67,9 @@ class PoliteClient:
         self._client.close()
 
     def get_text(self, url: str, params: dict[str, str | int] | None = None) -> str:
-        full_url = str(httpx.URL(url, params=params))
+        # Merge into the URL's own query string: httpx.URL(url, params=...) would
+        # replace it, dropping e.g. the filters of a search URL pasted from a browser.
+        full_url = str(httpx.URL(url).copy_merge_params(params or {}))
         self._check_robots(full_url)
 
         if (cached := self._cache_read(full_url)) is not None:

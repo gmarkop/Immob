@@ -282,3 +282,21 @@ def test_fetch_details_structured_data_beats_text_guesses(make_client):
     assert merged.rooms == 2  # from the detail page
     assert merged.year_built == 2019  # gap filled from the detail text
     assert merged.raw == details
+
+
+def test_search_with_copied_search_url_and_total(make_client):
+    requested = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url)
+        return httpx.Response(200, text=search_page([advert(1), advert(2)], rows_found=250))
+
+    url = "https://www.willhaben.at/iad/immobilien/eigentumswohnung/kaernten?PRICE_TO=220000&sort=1"
+    source = WillhabenSource(make_client(handler), search_url=url, rows=2)
+    assert source.total_found is None  # unknown before searching
+
+    list(source.search(max_pages=2))
+
+    assert [u.params["page"] for u in requested] == ["1", "2"]
+    assert all(u.params["PRICE_TO"] == "220000" and u.params["sort"] == "1" for u in requested)
+    assert source.total_found == 250

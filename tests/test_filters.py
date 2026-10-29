@@ -70,3 +70,10 @@ def test_postal_codes_may_be_written_as_numbers(tmp_path):
 def test_example_profile_loads():
     profile = load_profile(Path("profiles/kaernten.yaml"))
     assert profile.willhaben.region == "kaernten"
+
+
+def test_search_url_must_be_a_willhaben_search():
+    url = "https://www.willhaben.at/iad/immobilien/eigentumswohnung/kaernten?sort=1"
+    assert FilterProfile.model_validate({"willhaben": {"search_url": url}}).willhaben.search_url
+    with pytest.raises(ValidationError, match="willhaben real-estate search"):
+        FilterProfile.model_validate({"willhaben": {"search_url": "https://example.com/"}})

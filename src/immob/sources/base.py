@@ -20,6 +20,9 @@ class ParseError(Exception):
 class Source(ABC):
     name: ClassVar[str]
 
+    # Set by search(): how many listings the site reports for the search, if known.
+    total_found: int | None = None
+
     @abstractmethod
     def search(self, max_pages: int) -> Iterator[Listing]:
         """Yield listings from the search result pages (fast, fewer fields)."""

@@ -37,3 +37,8 @@ willhaben:
   region: kaernten
   property_type: eigentumswohnung   # condominium apartments for sale
   max_pages: 3                      # 90 ads per page
+
+  # Better: set filters and "newest first" on willhaben.at, then paste the URL
+  # from the address bar here. It replaces region and property_type, and every
+  # page read already roughly matches, with new listings on page 1.
+  # search_url: "https://www.willhaben.at/iad/immobilien/eigentumswohnung/kaernten?..."
