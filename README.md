@@ -5,9 +5,9 @@ It reads listings from willhaben.at, stores them in a local SQLite database,
 filters them with your criteria and sends new matches and price drops to
 Telegram.
 
-> **Status: Phase 1.** The willhaben parser is built around the JSON that
-> willhaben embeds in its pages, but it was written and tested offline against
-> synthetic pages. Before relying on it, check the field mapping on a real page
+> **Status: Phase 1.** The willhaben parser has been checked against real saved
+> search and listing pages. Not yet seen on a real page: dedicated fields for
+> year built and building type, so for now those come from the description text
 > (see [Verify the willhaben mapping](#1-verify-the-willhaben-mapping)).
 
 ## Quick start
@@ -26,8 +26,8 @@ uv run immob --help
 
 ### 1. Verify the willhaben mapping
 
-Open a willhaben search page for apartments in Kärnten in your browser, save it
-with Ctrl+S, and do the same with one listing page. Then:
+Open a willhaben search page for apartments in Kärnten in your browser, press
+**F5**, then save it with Ctrl+S. Do the same with one listing page. Then:
 
 ```bash
 uv run immob inspect ~/Downloads/search-page.html
@@ -37,7 +37,12 @@ uv run immob inspect ~/Downloads/search-page.html
 uv run immob inspect ~/Downloads/listing-page.html
 ```
 
-This prints every attribute willhaben sends. Compare the names with
+The reload matters: willhaben is a single-page app, so after clicking around,
+the data embedded in the page still belongs to the first page you opened (often
+the home page). If `inspect` finds no adverts, it prints an outline of the data
+it did find; `--save-json FILE` saves all of it.
+
+`inspect` prints every attribute willhaben sends. Compare the names with
 `ATTRIBUTE_NAMES` in `src/immob/sources/willhaben.py` (e.g. is the floor in
 `FLOOR`? the construction year in `CONSTRUCTION_YEAR`?) and adjust the lists.
 Fields that aren't structured are also searched for in the description text,

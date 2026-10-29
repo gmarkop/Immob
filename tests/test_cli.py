@@ -1,12 +1,14 @@
 """End-to-end: the CLI commands against a fake willhaben."""
 
+import json
+
 import httpx
 import pytest
 from typer.testing import CliRunner
 
 from immob import cli
 from immob.sources.willhaben import WillhabenSource
-from tests.conftest import advert, detail_page, search_page
+from tests.conftest import advert, detail_page, next_data_page, search_page
 
 ADS = [
     advert(
@@ -66,3 +68,26 @@ def test_inspect_saved_page(runner, tmp_path):
     result = runner.invoke(cli.app, ["inspect", str(page)])
     assert result.exit_code == 0, result.output
     assert "CONSTRUCTION_YEAR" in result.output
+
+
+def test_inspect_finds_adverts_under_unexpected_keys(runner, tmp_path):
+    page = tmp_path / "page.html"
+    page.write_text(next_data_page({"listing": {"data": DETAILS}}), encoding="utf-8")
+    result = runner.invoke(cli.app, ["inspect", str(page)])
+    assert result.exit_code == 0, result.output
+    assert "CONSTRUCTION_YEAR" in result.output
+    assert "Path to adverts: props.pageProps.listing.data" in result.output
+
+
+def test_inspect_without_adverts_shows_structure_and_saves_json(runner, tmp_path):
+    page = tmp_path / "page.html"
+    page.write_text(next_data_page({"results": {"total": 3, "hits": [{"x": 1}]}}), "utf-8")
+    saved = tmp_path / "data.json"
+
+    result = runner.invoke(cli.app, ["inspect", str(page), "--save-json", str(saved)])
+
+    assert result.exit_code == 1
+    assert "No advert-shaped objects found" in result.output
+    assert "    results: {2 keys}" in result.output
+    assert "      hits: [1 items]" in result.output
+    assert json.loads(saved.read_text())["props"]["pageProps"]["results"]["total"] == 3
