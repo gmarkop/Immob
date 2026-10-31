@@ -361,6 +361,59 @@ def search(
 
 
 @app.command()
+def duplicates(
+    db: DbOption = DEFAULT_DB,
+    show_all: Annotated[
+        bool, typer.Option("--all", help="Include flats whose listings are all gone.")
+    ] = False,
+    unlink: Annotated[
+        str | None,
+        typer.Option(
+            metavar="REF",
+            help="Undo a wrong match, e.g. --unlink immoscout24:6ac7397a…: the listing "
+            "counts as a flat of its own again.",
+        ),
+    ] = None,
+) -> None:
+    """Flats listed on more than one site, each with its listings and links."""
+    with Storage(db) as store:
+        if unlink:
+            listing = store.get_ref(unlink)
+            if listing is None or listing.duplicate_of is None:
+                console.print(f"[red]{unlink} isn't a listing linked as a duplicate.[/red]")
+                raise typer.Exit(1)
+            store.unlink_duplicate(listing)
+            console.print(
+                f"Unlinked {unlink} from {listing.duplicate_of}. It counts as a flat of its "
+                "own now; `immob notify --resend` sends it if it matches your profile."
+            )
+            return
+        groups = store.duplicate_groups()
+
+    if not show_all:
+        groups = [
+            (original, copies)
+            for original, copies in groups
+            if any(listing.gone_at is None for listing in [original, *copies])
+        ]
+    console.print(f"[bold]{len(groups)} flats listed on more than one site[/bold]")
+    for original, copies in sorted(groups, key=lambda group: group[0].price_eur or 0):
+        listings = [original, *copies]
+        prices = " / ".join(format_eur(listing.price_eur) for listing in listings)
+        areas = " / ".join(_num(listing.area_m2) for listing in listings)
+        place = " ".join(filter(None, [original.postal_code, original.location]))
+        console.print(f"\n{prices} · {areas} m² · {place}", highlight=False)
+        if len({listing.price_eur for listing in listings}) > 1:
+            cheapest = min(listings, key=lambda listing: listing.price_eur or float("inf"))
+            console.print(f"  [yellow]Prices differ: cheapest on {cheapest.source}[/yellow]")
+        for listing in listings:
+            gone = f" [dim](gone {listing.gone_at:%Y-%m-%d})[/dim]" if listing.gone_at else ""
+            console.print(f"  {listing.ref}{gone}", highlight=False)
+            console.print(f"    {listing.title}", markup=False, highlight=False)
+            console.print(f"    {listing.url}", markup=False, highlight=False)
+
+
+@app.command()
 def gone(
     profile_path: ProfileOption = DEFAULT_PROFILE,
     db: DbOption = DEFAULT_DB,

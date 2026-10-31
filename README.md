@@ -229,6 +229,7 @@ After an update that changes the unit files, run `immob install-service` and
 |---|---|
 | `immob crawl` | Fetch listings, store them, send notifications. `--seed` for the first run, `--no-notify` to skip Telegram, `--pages N`, `--no-details`, `--refresh-details` to re-read detail pages after an update, `--cache-dir DIR` while developing. |
 | `immob search` | Table of stored listings that match the profile. |
+| `immob duplicates` | Flats listed on more than one site, with each listing's link; flags price differences between sites. `--unlink REF` undoes a wrong match. |
 | `immob gone` | Listings that left the search in the last 30 days (`--days N`): how long they were online, price changes, last price. `--all` includes listings that don't match the profile. |
 | `immob show ID` | One listing with price history and the filter verdict. `--text` also prints the ad's text, to see where yes/no/? values came from. |
 | `immob notify` | Send pending notifications without crawling. `--resend` sends all current matches again, e.g. after changing the profile (asks first if there are more than 10). |
@@ -305,8 +306,10 @@ listings outside it count as gone too.
 
 **Duplicates.** When a site lists a flat already known from another site,
 the new listing is linked to the earlier one instead of being announced again.
-`immob show` names the other listing, and Telegram messages add "Auch auf …"
-links. If the original listing goes but the copy is still online, the copy
+`immob show` names the other listing, Telegram messages add "Auch auf …"
+links, and `immob duplicates` lists all linked flats. If two different flats
+were ever linked by mistake, `immob duplicates --unlink immoscout24:<id>` makes
+the copy a flat of its own again. If the original listing goes but the copy is still online, the copy
 takes its place in `immob search`.
 
 ## Being a good citizen

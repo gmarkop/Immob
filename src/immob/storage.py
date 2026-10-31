@@ -216,6 +216,14 @@ class Storage:
                 [original.ref, *listing.key],
             )
 
+    def unlink_duplicate(self, listing: Listing) -> None:
+        """Undo a duplicate link: the listing counts as a flat of its own again."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE listings SET duplicate_of = NULL WHERE source = ? AND source_id = ?",
+                list(listing.key),
+            )
+
     def mark_all_notified(self, now: datetime | None = None) -> int:
         """Treat everything stored so far as already notified (first-run seeding)."""
         with self._conn:
@@ -260,6 +268,15 @@ class Storage:
             "SELECT * FROM listings WHERE duplicate_of = ?", [listing.ref]
         ).fetchall()
         return [_to_listing(row) for row in rows]
+
+    def duplicate_groups(self) -> list[tuple[StoredListing, list[StoredListing]]]:
+        """Each flat listed on several sites: (original listing, its copies)."""
+        listings = {listing.ref: listing for listing in self.all()}
+        copies: dict[str, list[StoredListing]] = {}
+        for listing in listings.values():
+            if listing.duplicate_of in listings:
+                copies.setdefault(listing.duplicate_of, []).append(listing)
+        return [(listings[ref], group) for ref, group in copies.items()]
 
     def gone_since(self, since: datetime) -> list[StoredListing]:
         rows = self._conn.execute(

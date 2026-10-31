@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from immob import cli
 from immob.filters import FilterProfile
+from immob.models import Listing
 from immob.notify import TelegramNotifier
 from immob.sources.immoscout24 import ImmoScout24Source
 from immob.sources.willhaben import WillhabenSource
@@ -313,3 +314,59 @@ def test_build_sources_adds_immoscout24_when_configured(make_client):
     profile = FilterProfile.model_validate({"immoscout24": {"search_url": url, "max_pages": 2}})
     sources = cli.build_sources(profile, client)
     assert [(s.name, pages) for s, pages in sources] == [("willhaben", 3), ("immoscout24", 2)]
+
+
+def _linked_pair(db: str, wh_price: int = 150000, is_price: int = 150000) -> None:
+    common = {"title": "Helle Wohnung", "area_m2": 54, "postal_code": "9500", "location": "Villach"}
+    original = Listing(
+        source="willhaben", source_id="1", url="https://wh/1", price_eur=wh_price, **common
+    )
+    copy = Listing(
+        source="immoscout24", source_id="a", url="https://is24/a", price_eur=is_price, **common
+    )
+    with Storage(db) as store:
+        store.upsert(original)
+        store.upsert(copy)
+        store.set_duplicate_of(copy, original)
+
+
+def test_duplicates_lists_flats_on_several_sites(monkeypatch, tmp_path):
+    db = str(tmp_path / "test.db")
+    monkeypatch.setenv("IMMOB_DB", db)
+    _linked_pair(db, wh_price=155000, is_price=150000)
+
+    result = CliRunner().invoke(cli.app, ["duplicates"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 flats listed on more than one site" in result.output
+    assert "willhaben:1" in result.output and "immoscout24:a" in result.output
+    assert "https://is24/a" in result.output
+    assert "Prices differ: cheapest on immoscout24" in result.output
+
+
+def test_duplicates_hides_fully_gone_flats(monkeypatch, tmp_path):
+    db = str(tmp_path / "test.db")
+    monkeypatch.setenv("IMMOB_DB", db)
+    _linked_pair(db)
+    with Storage(db) as store:
+        store.mark_gone("willhaben", seen_ids=set())
+        store.mark_gone("immoscout24", seen_ids=set())
+
+    assert "0 flats" in CliRunner().invoke(cli.app, ["duplicates"]).output
+    result = CliRunner().invoke(cli.app, ["duplicates", "--all"])
+    assert "1 flats" in result.output and "(gone " in result.output
+
+
+def test_duplicates_unlink(monkeypatch, tmp_path):
+    db = str(tmp_path / "test.db")
+    monkeypatch.setenv("IMMOB_DB", db)
+    _linked_pair(db)
+
+    result = CliRunner().invoke(cli.app, ["duplicates", "--unlink", "immoscout24:a"])
+
+    assert result.exit_code == 0, result.output
+    assert "Unlinked immoscout24:a from willhaben:1" in result.output
+    with Storage(db) as store:
+        assert store.get("immoscout24", "a").duplicate_of is None
+    failed = CliRunner().invoke(cli.app, ["duplicates", "--unlink", "willhaben:1"])
+    assert failed.exit_code == 1  # an original, not a linked copy
