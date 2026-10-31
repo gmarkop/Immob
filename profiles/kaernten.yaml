@@ -54,3 +54,10 @@ willhaben:
   # from the address bar here. It replaces region and property_type, and every
   # page read already roughly matches, with new listings on page 1.
   # search_url: "https://www.willhaben.at/iad/immobilien/eigentumswohnung/kaernten?..."
+
+# ImmoScout24 is crawled when search_url is set: on immobilienscout24.at, open
+# a search (Kärnten, your filters, newest first) in a private browser window
+# and paste the URL from the address bar.
+immoscout24:
+  # search_url: "https://www.immobilienscout24.at/regional/kaernten/..."
+  max_pages: 3

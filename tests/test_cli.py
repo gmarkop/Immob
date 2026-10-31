@@ -11,9 +11,11 @@ from typer.testing import CliRunner
 from immob import cli
 from immob.filters import FilterProfile
 from immob.notify import TelegramNotifier
+from immob.sources.immoscout24 import ImmoScout24Source
 from immob.sources.willhaben import WillhabenSource
 from immob.storage import Storage
 from tests.conftest import advert, detail_page, next_data_page, search_page
+from tests.conftest import search_page as search_page_wh
 
 ADS = [
     advert(
@@ -40,7 +42,9 @@ def runner(monkeypatch, make_client, tmp_path):
         return httpx.Response(404)
 
     client = make_client(handler)
-    monkeypatch.setattr(cli, "build_source", lambda profile, _client: WillhabenSource(client))
+    monkeypatch.setattr(
+        cli, "build_sources", lambda profile, _client: [(WillhabenSource(client), 3)]
+    )
     # Tests check content, not layout: a wide console keeps tables from truncating.
     monkeypatch.setattr(cli, "console", Console(width=160))
     monkeypatch.setenv("IMMOB_DB", str(tmp_path / "test.db"))
@@ -110,7 +114,8 @@ def test_show_text_prints_the_ad_text(runner):
 def test_build_source_uses_search_url_from_profile(make_client):
     url = "https://www.willhaben.at/iad/immobilien/eigentumswohnung/kaernten?sort=1"
     profile = FilterProfile.model_validate({"willhaben": {"search_url": url}})
-    assert cli.build_source(profile, make_client(lambda r: None)).search_url == url
+    [(source, _)] = cli.build_sources(profile, make_client(lambda r: None))
+    assert source.search_url == url
 
 
 def _capturing_notifier(monkeypatch) -> list[dict]:
@@ -180,7 +185,9 @@ def test_crawl_exits_with_error_when_search_fails(monkeypatch, make_client, tmp_
         return httpx.Response(200, text="<html>a redesigned page</html>")
 
     client = make_client(handler)
-    monkeypatch.setattr(cli, "build_source", lambda profile, _client: WillhabenSource(client))
+    monkeypatch.setattr(
+        cli, "build_sources", lambda profile, _client: [(WillhabenSource(client), 3)]
+    )
     monkeypatch.setenv("IMMOB_DB", str(tmp_path / "test.db"))
 
     result = CliRunner().invoke(cli.app, ["crawl", "--no-notify"])
@@ -228,3 +235,81 @@ def test_gone_lists_listings_that_left_the_search(runner):
 def test_crawl_reports_gone_after_complete_crawl(runner):
     result = runner.invoke(cli.app, ["crawl", "--no-notify"])
     assert "0 gone, 0 already known from another site." in result.output
+
+
+def test_inspect_immoscout24_pages(tmp_path):
+    from tests.test_immoscout24 import REAL_HIT, expose_page, search_page
+
+    search = tmp_path / "search.html"
+    search.write_text(search_page([REAL_HIT]), encoding="utf-8")
+    result = CliRunner().invoke(cli.app, ["inspect", str(search)])
+    assert result.exit_code == 0, result.output
+    assert "ImmoScout24 search: 1 of 1 hits" in result.output
+    assert "€ 52.000" in result.output
+
+    expose = tmp_path / "expose.html"
+    expose.write_text(expose_page(), encoding="utf-8")
+    result = CliRunner().invoke(cli.app, ["inspect", str(expose)])
+    assert result.exit_code == 0, result.output
+    assert "hwb                 203.0" in result.output
+
+
+def test_inspect_missing_file_explains():
+    result = CliRunner().invoke(cli.app, ["inspect", "~/no such file.html"])
+    assert result.exit_code == 1
+    assert "File not found" in result.output
+
+
+def test_crawl_reads_both_sites_and_links_duplicates(monkeypatch, make_client, tmp_path):
+    from tests.test_immoscout24 import REAL_HIT, expose_page, search_page
+
+    # The same flat as the willhaben listing 1 in ADS: same postcode, area, rooms, price.
+    is24_hit = REAL_HIT | {
+        "exposeId": "is1", "links": {}, "addressString": "9020 Klagenfurt",
+        "primaryPrice": 181000, "primaryArea": 55, "numberOfRooms": 2,
+    }  # fmt: skip
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.startswith("/iad/immobilien/eigentumswohnung"):
+            return httpx.Response(200, text=search_page_wh(ADS))
+        if path == "/iad/immobilien/d/wohnung-1/":
+            return httpx.Response(200, text=detail_page(DETAILS))
+        if path == "/regional/kaernten":
+            return httpx.Response(200, text=search_page([is24_hit]))
+        if path.startswith("/expose/"):
+            return httpx.Response(200, text=expose_page())
+        return httpx.Response(404)
+
+    client = make_client(handler)
+    monkeypatch.setattr(
+        cli,
+        "build_sources",
+        lambda profile, _client: [
+            (WillhabenSource(client), 3),
+            (
+                ImmoScout24Source(
+                    client, search_url="https://www.immobilienscout24.at/regional/kaernten"
+                ),
+                3,
+            ),
+        ],
+    )
+    monkeypatch.setattr(cli, "console", Console(width=160))
+    monkeypatch.setenv("IMMOB_DB", str(tmp_path / "test.db"))
+
+    result = CliRunner().invoke(cli.app, ["crawl", "--no-notify", "--no-details"])
+
+    assert result.exit_code == 0, result.output
+    assert "willhaben: Seen 2 of 2 listings found" in result.output
+    assert "immoscout24: Seen 1 of 1 listings found" in result.output
+    assert "1 already known from another site" in result.output
+
+
+def test_build_sources_adds_immoscout24_when_configured(make_client):
+    client = make_client(lambda r: None)
+    assert [s.name for s, _ in cli.build_sources(FilterProfile(), client)] == ["willhaben"]
+    url = "https://www.immobilienscout24.at/regional/kaernten/wohnung-kaufen"
+    profile = FilterProfile.model_validate({"immoscout24": {"search_url": url, "max_pages": 2}})
+    sources = cli.build_sources(profile, client)
+    assert [(s.name, pages) for s, pages in sources] == [("willhaben", 3), ("immoscout24", 2)]

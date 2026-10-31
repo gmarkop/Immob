@@ -107,3 +107,11 @@ def test_energy_filters():
     ]
     with pytest.raises(ValidationError, match="must be one of"):
         FilterProfile(energy_class_max="Z")
+
+
+def test_immoscout24_is_off_until_a_search_url_is_set():
+    assert FilterProfile().immoscout24.search_url is None
+    url = "https://www.immobilienscout24.at/regional/kaernten/wohnung-kaufen"
+    assert FilterProfile.model_validate({"immoscout24": {"search_url": url}}).immoscout24.search_url
+    with pytest.raises(ValidationError, match="ImmoScout24 search"):
+        FilterProfile.model_validate({"immoscout24": {"search_url": "https://www.willhaben.at/x"}})

@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import ClassVar
 
+from immob.extract import fill_from_text
 from immob.models import Listing
 
 
@@ -30,3 +31,20 @@ class Source(ABC):
     @abstractmethod
     def fetch_details(self, listing: Listing) -> Listing:
         """Return the listing completed with data from its detail page (slow)."""
+
+
+def merge_details(
+    summary: Listing, summary_text: str, detail: Listing, detail_text: str
+) -> Listing:
+    """Combine a search-page listing with its detail page.
+
+    Structured fields are merged first (the detail page wins over the search
+    page), and only then are gaps filled from text, so a text guess never
+    overrides real data: "Fahrradraum im EG" in a description mustn't replace
+    the floor a structured field stated.
+    """
+    known = {k: v for k, v in detail.model_dump().items() if v not in (None, "")}
+    merged = summary.model_copy(update=known | {"details_fetched": True})
+    merged = fill_from_text(merged, f"{detail_text}\n{summary_text}")
+    merged.raw = detail.raw
+    return merged

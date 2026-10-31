@@ -235,7 +235,7 @@ After an update that changes the unit files, run `immob install-service` and
 | `immob telegram-test` | Check the Telegram setup. |
 | `immob alert MESSAGE` | Send an alert to Telegram; text piped in (e.g. log lines) is attached. |
 | `immob install-service` | Write systemd units for scheduled runs with failure alerts; see [Run on a server](#run-on-a-server). |
-| `immob inspect FILE_OR_URL` | Dump a willhaben page's raw attributes. |
+| `immob inspect FILE_OR_URL` | Show what a saved page contains: willhaben's raw attributes, or what immob extracts from an ImmoScout24 page. |
 
 All commands take `--profile` (default `profiles/kaernten.yaml`, or set
 `IMMOB_PROFILE`) and `--db` (default `immob.db`, or set `IMMOB_DB`). Add `-v`
@@ -255,6 +255,7 @@ SQLite (listings + price_history) ◄──────────────�
 |---|---|
 | `models.py` | `Listing`, the one normalized shape every source produces. `None` means "the ad doesn't say", which differs from `False`/`0`. |
 | `sources/base.py` | The `Source` interface. A new portal is a new class with `search()` and `fetch_details()`. |
+| `sources/immoscout24.py` | Reads ImmoScout24's embedded JavaScript state (search pages) and JSON-LD plus visible label/value text (listing pages). |
 | `sources/willhaben.py` | Reads the JSON in willhaben's `__NEXT_DATA__` script tag rather than the visible HTML. |
 | `dedup.py` | Recognizes the same flat on two sites (same postal code, area within 3 %, same rooms, price within 5 %), so it's announced once. |
 | `extract.py` | Regexes that find floor, year built, parking, elevator and commission in German ad text. |
@@ -264,6 +265,32 @@ SQLite (listings + price_history) ◄──────────────�
 | `pipeline.py` | The crawl and notify steps. Detail pages are fetched only for possible matches. |
 | `notify.py` | Telegram messages; errors are cleaned so the bot token never shows up in logs. |
 | `cli.py` | The `immob` command (Typer). |
+
+## ImmoScout24
+
+immob also reads [immobilienscout24.at](https://www.immobilienscout24.at)
+once the profile has an ImmoScout24 search:
+
+```yaml
+immoscout24:
+  search_url: "https://www.immobilienscout24.at/regional/kaernten/..."
+```
+
+Copy the URL from a search with your filters, opened in a private browser
+window. When you're logged in, saved pages contain your account data.
+
+ImmoScout24 delivers its data differently from willhaben. Search pages embed a
+JavaScript object (`window.__INITIAL_STATE__`). Listing pages have schema.org
+JSON-LD for price, area, rooms and address; floor, year, heating, HWB, costs
+and commission come from the visible text, where a label line ("Etage") is
+followed by its value ("2"). `immob inspect` on a saved ImmoScout24 page shows
+what immob extracts from it. Paging through searches with more than one result
+page has not been checked against the real site yet: if a crawl reports fewer
+listings than were found, `inspect` the search page and look at its
+`Pagination:` line.
+
+Both sites' searches are read before notifications go out, so a flat listed on
+both is announced once (see below).
 
 ## Gone listings and duplicates
 
@@ -306,8 +333,8 @@ built in `tests/conftest.py`.
 
 ## Roadmap
 
-- **Phase 2:** more sources (ImmoScout24, derStandard, Kleine Zeitung,
-  edikte.justiz.gv.at), duplicate detection across portals.
+- **Phase 2:** ImmoScout24 and duplicate detection are done; next could be
+  derStandard, Kleine Zeitung or edikte.justiz.gv.at.
 - **Phase 3 (done):** scheduled runs with failure alerts, via a systemd timer on an always-on machine.
 - **Phase 4:** Streamlit dashboard with a map, € per m² by district and a
   full purchase-cost calculator (property transfer tax, land registry fee,

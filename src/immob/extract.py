@@ -85,6 +85,16 @@ def extract_floor(text: str) -> tuple[int | None, str | None]:
     return None, None
 
 
+def parse_floor_value(value: str | None) -> tuple[int | None, str | None]:
+    """A floor field: a plain number ("1", "-1") or text ("Erdgeschoss", "DG")."""
+    if value is None:
+        return None, None
+    try:
+        return int(value), None
+    except ValueError:
+        return extract_floor(value)
+
+
 # --- Year built and building type --------------------------------------------
 
 _YEAR_BUILT = re.compile(
