@@ -66,6 +66,15 @@ willhaben:
   search_url: "https://www.willhaben.at/iad/immobilien/eigentumswohnung/kaernten?..."
 ```
 
+Filtering happens twice: willhaben's filters (the URL) decide which listings
+are read, and your profile decides which of those you're notified about. Keep
+them consistent: a profile with `rooms_min: 2` or `postal_code_prefixes` still
+drops listings that a wider willhaben search finds.
+
+Each listing is notified only once. After loosening the profile, listings that
+were already stored (and seeded as seen) don't come again on their own; send the
+current matches with `immob notify --resend`.
+
 The crawler keeps that URL's filters and only changes `page` and `rows`.
 `crawl` prints how many listings willhaben found for the search
 ("Seen 270 of 412 listings found"), so you can tell whether `max_pages` is
@@ -220,7 +229,7 @@ After an update that changes the unit files, run `immob install-service` and
 | `immob crawl` | Fetch listings, store them, send notifications. `--seed` for the first run, `--no-notify` to skip Telegram, `--pages N`, `--no-details`, `--refresh-details` to re-read detail pages after an update, `--cache-dir DIR` while developing. |
 | `immob search` | Table of stored listings that match the profile. |
 | `immob show ID` | One listing with price history and the filter verdict. `--text` also prints the ad's text, to see where yes/no/? values came from. |
-| `immob notify` | Send pending notifications without crawling. |
+| `immob notify` | Send pending notifications without crawling. `--resend` sends all current matches again, e.g. after changing the profile (asks first if there are more than 10). |
 | `immob telegram-test` | Check the Telegram setup. |
 | `immob alert MESSAGE` | Send an alert to Telegram; text piped in (e.g. log lines) is attached. |
 | `immob install-service` | Write systemd units for scheduled runs with failure alerts; see [Run on a server](#run-on-a-server). |

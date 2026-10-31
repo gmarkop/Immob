@@ -119,10 +119,11 @@ def _capturing_notifier(monkeypatch) -> list[dict]:
         sent.append(json.loads(request.content))
         return httpx.Response(200, json={"ok": True})
 
-    notifier = TelegramNotifier(
-        "t", "1", transport=httpx.MockTransport(handler), sleep=lambda _: None
-    )
-    monkeypatch.setattr(TelegramNotifier, "from_env", classmethod(lambda cls: notifier))
+    def from_env(cls) -> TelegramNotifier:
+        # A new notifier per call, like the real from_env: commands close theirs.
+        return cls("t", "1", transport=httpx.MockTransport(handler), sleep=lambda _: None)
+
+    monkeypatch.setattr(TelegramNotifier, "from_env", classmethod(from_env))
     return sent
 
 
@@ -184,3 +185,26 @@ def test_crawl_exits_with_error_when_search_fails(monkeypatch, make_client, tmp_
 
     assert result.exit_code == 1  # so systemd counts the run as failed and alerts
     assert "The search failed" in result.output
+
+
+def test_notify_resend_sends_current_matches(runner, monkeypatch):
+    runner.invoke(cli.app, ["crawl", "--no-notify", "--seed"])  # everything marked as seen
+    sent = _capturing_notifier(monkeypatch)
+
+    assert "Sent 0" in runner.invoke(cli.app, ["notify"]).output  # nothing pending
+    result = runner.invoke(cli.app, ["notify", "--resend"])
+
+    assert result.exit_code == 0, result.output
+    assert "Sent 1 Telegram notifications." in result.output  # the flat that matches
+    assert sent[0]["text"].startswith("🏠 <b>Current match</b>")
+
+
+def test_notify_resend_asks_before_many_messages(runner, monkeypatch):
+    monkeypatch.setattr(cli, "current_matches", lambda store, profile, max_age_days: [None] * 11)
+    sent = _capturing_notifier(monkeypatch)
+
+    result = runner.invoke(cli.app, ["notify", "--resend"], input="n\n")
+
+    assert "Send 11 Telegram messages?" in result.output
+    assert result.exit_code == 1  # aborted
+    assert sent == []

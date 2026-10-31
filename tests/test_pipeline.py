@@ -1,6 +1,7 @@
 """The crawl and notification steps together, with a fake source."""
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from immob.filters import FilterProfile
 from immob.models import Listing
 from immob.notify import TelegramNotifier
-from immob.pipeline import run_crawl, send_pending
+from immob.pipeline import current_matches, resend, run_crawl, send_pending
 from immob.sources.base import ParseError, Source
 from immob.storage import Storage
 
@@ -105,3 +106,33 @@ def test_failed_search_is_reported(store):
 
     assert stats.search_failed
     assert store.get("fake", "a") is not None  # what arrived before the failure is kept
+
+
+def test_current_matches_skip_stale_and_non_matching(store):
+    now = datetime.now(UTC)
+    store.upsert(make("recent", 150000), now=now)
+    store.upsert(make("stale", 150000), now=now - timedelta(days=30))  # likely sold
+    store.upsert(make("too-expensive", 400000), now=now)
+
+    matches = current_matches(store, FilterProfile(price_max=200000), max_age_days=7)
+
+    assert [listing.source_id for listing in matches] == ["recent"]
+
+
+def test_resend_includes_listings_notified_before(store):
+    store.upsert(make("a", 150000))
+    store.mark_all_notified()  # e.g. after `crawl --seed`
+    sent_texts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent_texts.append(request.content.decode())
+        return httpx.Response(200, json={"ok": True})
+
+    notifier = TelegramNotifier(
+        "t", "1", transport=httpx.MockTransport(handler), sleep=lambda _: None
+    )
+    assert send_pending(store, FilterProfile(), notifier) == 0  # nothing pending
+
+    matches = current_matches(store, FilterProfile())
+    assert resend(store, notifier, matches) == 1
+    assert "Current match" in sent_texts[0]
