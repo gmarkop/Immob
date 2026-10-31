@@ -35,14 +35,14 @@ from immob.extract import (
     extract_building_type,
     extract_cellar,
     extract_elevator,
-    extract_floor,
     fill_from_text,
     parse_commission_fee,
+    parse_floor_value,
     parse_number,
 )
 from immob.http import PoliteClient
 from immob.models import Listing
-from immob.sources.base import ParseError, Source
+from immob.sources.base import ParseError, Source, merge_details
 
 log = logging.getLogger(__name__)
 
@@ -143,19 +143,11 @@ class WillhabenSource(Source):
         if not isinstance(details, dict):
             raise ParseError(f"no advertDetails in __NEXT_DATA__ of {listing.url}")
 
-        # Merge structured fields first (detail page beats search page), and only
-        # then guess from text, so a guess never overrides real data. E.g. the
-        # detail page has no FLOOR, and "Fahrradraum im EG" in its text mustn't
-        # replace the FLOOR the search page sent.
         summary, summary_text = (
             _parse_structured(listing.raw) if listing.raw else (listing, listing.search_text)
         )
         detailed, detail_text = _parse_structured(details, fallback_url=listing.url)
-        known = {k: v for k, v in detailed.model_dump().items() if v not in (None, "")}
-        merged = summary.model_copy(update=known | {"details_fetched": True})
-        merged = fill_from_text(merged, f"{detail_text}\n{summary_text}")
-        merged.raw = details
-        return merged
+        return merge_details(summary, summary_text, detailed, detail_text)
 
 
 def extract_next_data(page_html: str) -> dict[str, Any]:
@@ -241,7 +233,7 @@ def _parse_structured(
         url = fallback_url or f"{BASE_URL}/iad/object?adId={source_id}"
 
     price = parse_number(first("price")) or parse_number(first("price_display"))
-    floor, floor_label = _parse_floor(first("floor"))
+    floor, floor_label = parse_floor_value(first("floor"))
     year = parse_number(first("year_built"))
     building_type_text = first("building_type")
     is_private = first("is_private")
@@ -310,15 +302,6 @@ def _is_property_text(name: str) -> bool:
         and name not in ATTRIBUTE_NAMES["description"]  # already in the description
         and not name.startswith((_SECTION_PREFIX, *_NOT_TEXT_PREFIXES))
     )
-
-
-def _parse_floor(value: str | None) -> tuple[int | None, str | None]:
-    if value is None:
-        return None, None
-    try:
-        return int(value), None  # willhaben sends plain numbers, e.g. "1"
-    except ValueError:
-        return extract_floor(value)
 
 
 def _clean_html(text: str | None) -> str | None:

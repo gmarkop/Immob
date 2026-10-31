@@ -21,8 +21,15 @@ from immob.filters import FilterProfile, load_profile
 from immob.http import PoliteClient, RobotsDisallowed
 from immob.models import Listing, StoredListing, format_eur
 from immob.notify import NotifierError, TelegramNotifier
-from immob.pipeline import current_matches, resend, run_crawl, send_pending
+from immob.pipeline import CrawlStats, current_matches, resend, run_crawl, send_pending
 from immob.sources.base import ParseError, Source
+from immob.sources.immoscout24 import (
+    ImmoScout24Source,
+    find_results,
+    initial_state,
+    parse_expose,
+    parse_hit,
+)
 from immob.sources.willhaben import (
     WillhabenSource,
     attributes,
@@ -52,14 +59,29 @@ def main(verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False) -> N
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-def build_source(profile: FilterProfile, client: PoliteClient) -> Source:
-    settings = profile.willhaben
-    return WillhabenSource(
-        client,
-        region=settings.region,
-        property_type=settings.property_type,
-        search_url=settings.search_url,
-    )
+def build_sources(profile: FilterProfile, client: PoliteClient) -> list[tuple[Source, int]]:
+    """The sites to crawl, each with its page limit. willhaben is always on;
+    ImmoScout24 when the profile has an immoscout24.search_url."""
+    willhaben = profile.willhaben
+    sources: list[tuple[Source, int]] = [
+        (
+            WillhabenSource(
+                client,
+                region=willhaben.region,
+                property_type=willhaben.property_type,
+                search_url=willhaben.search_url,
+            ),
+            willhaben.max_pages,
+        )
+    ]
+    if profile.immoscout24.search_url:
+        sources.append(
+            (
+                ImmoScout24Source(client, search_url=profile.immoscout24.search_url),
+                profile.immoscout24.max_pages,
+            )
+        )
+    return sources
 
 
 def _load_profile(path: Path) -> FilterProfile:
@@ -99,34 +121,27 @@ def crawl(
             raise typer.Exit(1) from None
 
     with Storage(db) as store, PoliteClient(cache_dir=cache_dir) as client:
-        source = build_source(profile, client)
-        try:
-            stats = run_crawl(
-                source,
-                store,
-                profile,
-                max_pages=pages or profile.willhaben.max_pages,
-                fetch_details=details,
-                max_details=max_details,
-                refresh_details=refresh_details,
-            )
-        except RobotsDisallowed as exc:
-            console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(1) from None
-
-        seen = f"Seen {stats.seen} listings"
-        if stats.total_found is not None:
-            seen = f"Seen {stats.seen} of {stats.total_found} listings found"
-        console.print(
-            f"{seen}: {stats.new} new, {stats.price_changed} price changes, "
-            f"{stats.details_fetched} detail pages fetched."
-        )
-        if stats.complete:
-            console.print(f"{stats.gone} gone, {stats.duplicates} already known from another site.")
-        elif not stats.search_failed:
-            console.print("Not all pages read, so gone listings weren't checked.")
-        if stats.errors:
-            console.print(f"[yellow]{stats.errors} errors, run with -v for details.[/yellow]")
+        # Every site's search is read before anything is notified, so a flat
+        # listed on both is already linked as a duplicate when messages go out.
+        failed = False
+        for source, max_pages in build_sources(profile, client):
+            try:
+                stats = run_crawl(
+                    source,
+                    store,
+                    profile,
+                    max_pages=pages or max_pages,
+                    fetch_details=details,
+                    max_details=max_details,
+                    refresh_details=refresh_details,
+                )
+            except RobotsDisallowed as exc:
+                # One site refusing crawlers shouldn't stop the others.
+                console.print(f"[red]{source.name}: {exc}[/red]")
+                failed = True
+                continue
+            _print_stats(source.name, stats)
+            failed = failed or stats.search_failed
 
         if seed:
             marked = store.mark_all_notified()
@@ -134,11 +149,27 @@ def crawl(
         elif notifier:
             _send_notifications(store, profile, notifier)
 
-    if stats.search_failed:
+    if failed:
         # A non-zero exit code makes systemd count the run as failed, which
         # triggers the failure alert (see `immob install-service`).
         console.print("[red]The search failed; see the log above.[/red]")
         raise typer.Exit(1)
+
+
+def _print_stats(name: str, stats: CrawlStats) -> None:
+    seen = f"Seen {stats.seen} listings"
+    if stats.total_found is not None:
+        seen = f"Seen {stats.seen} of {stats.total_found} listings found"
+    console.print(
+        f"{name}: {seen}: {stats.new} new, {stats.price_changed} price changes, "
+        f"{stats.details_fetched} detail pages fetched."
+    )
+    if stats.complete:
+        console.print(f"  {stats.gone} gone, {stats.duplicates} already known from another site.")
+    elif not stats.search_failed:
+        console.print("  Not all pages read, so gone listings weren't checked.")
+    if stats.errors:
+        console.print(f"  [yellow]{stats.errors} errors, run with -v for details.[/yellow]")
 
 
 @app.command()
@@ -409,23 +440,36 @@ def show(
 
 @app.command()
 def inspect(
-    page: Annotated[str, typer.Argument(help="A saved willhaben .html file, or a URL.")],
+    page: Annotated[str, typer.Argument(help="A saved .html file, or a URL.")],
     index: Annotated[int, typer.Option(help="Which advert of a search page to show.")] = 0,
     save_json: Annotated[
         Path | None, typer.Option(help="Also save the page's embedded JSON to this file.")
     ] = None,
 ) -> None:
-    """Print the raw attributes of a willhaben page, to check the field mapping.
+    """Show what a saved page contains, to check the field mapping.
 
-    Save a willhaben search or listing page from your browser (Ctrl+S) and run
-    this on it; compare the names with ATTRIBUTE_NAMES in sources/willhaben.py.
+    Save a willhaben or ImmoScout24 search or listing page from your browser
+    (F5, then Ctrl+S) and run this on it. For willhaben it prints the raw
+    attributes (compare with ATTRIBUTE_NAMES in sources/willhaben.py); for
+    ImmoScout24, what immob extracts.
     """
-    path = Path(page)
-    if path.exists():
-        page_html = path.read_text(encoding="utf-8")
-    else:
+    if page.startswith(("http://", "https://")):
         with PoliteClient() as client:
             page_html = client.get_text(page)
+    else:
+        path = Path(page).expanduser()
+        if not path.is_file():
+            console.print(
+                f"[red]File not found: {path}[/red]\n"
+                "Put quotes around names with spaces, and keep ~ outside them. Files "
+                "saved by a Windows browser are under /mnt/c/Users/<name>/Downloads in WSL."
+            )
+            raise typer.Exit(1)
+        page_html = path.read_text(encoding="utf-8", errors="replace")
+
+    if "__NEXT_DATA__" not in page_html and "immobilienscout24" in page_html:
+        _inspect_immoscout24(page_html, page)
+        return
 
     try:
         data = extract_next_data(page_html)
@@ -456,6 +500,49 @@ def inspect(
     console.print(table)
     console.print(f"Other keys: {', '.join(k for k in advert if k != 'attributes')}")
     console.print(f"Path to adverts: {_path_to(data, advert) or '?'}")
+
+
+def _inspect_immoscout24(page_html: str, page: str) -> None:
+    """Print what immob extracts from an ImmoScout24 search or listing page."""
+    try:
+        results = find_results(initial_state(page_html))
+    except ParseError:
+        results = None
+    if results is not None:
+        hits = results.get("hits") or []
+        table = Table(title=f"ImmoScout24 search: {len(hits)} of {results.get('totalHits')} hits")
+        for column in ("ID", "Price", "m²", "Rooms", "Garage"):
+            table.add_column(column, no_wrap=True)
+        table.add_column("Place", overflow="ellipsis", no_wrap=True)
+        for hit in hits:
+            listing = parse_hit(hit)
+            table.add_row(
+                listing.source_id,
+                format_eur(listing.price_eur),
+                _num(listing.area_m2),
+                _num(listing.rooms),
+                listing.garage_display,
+                " ".join(filter(None, [listing.postal_code, listing.location])),
+            )
+        console.print(table)
+        console.print(
+            f"Pagination: {json.dumps(results.get('pagination'), ensure_ascii=False)}",
+            markup=False,
+            highlight=False,
+        )
+        return
+
+    url = page if page.startswith("http") else "https://www.immobilienscout24.at/expose/saved"
+    try:
+        listing, _ = parse_expose(page_html, url)
+    except ParseError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+    console.print(f"[bold]{listing.title}[/bold]")
+    for field, value in listing.model_dump(exclude={"description"}).items():
+        if value is not None:
+            console.print(f"  {field:<20}{value}", markup=False, highlight=False)
+    console.print(f"  {'labels found':<20}{listing.raw['labels']}", markup=False, highlight=False)
 
 
 def _describe_structure(data: object, max_depth: int = 6, max_lines: int = 150) -> list[str]:

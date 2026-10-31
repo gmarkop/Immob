@@ -36,6 +36,23 @@ class WillhabenSettings(BaseModel):
         return url
 
 
+class ImmoScout24Settings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # A search copied from the browser's address bar. ImmoScout24 is only
+    # crawled when this is set.
+    search_url: str | None = None
+    max_pages: int = 3
+
+    @field_validator("search_url")
+    @classmethod
+    def _is_immoscout24_search(cls, url: str | None) -> str | None:
+        prefix = "https://www.immobilienscout24.at/"
+        if url is not None and not url.startswith(prefix):
+            raise ValueError(f"must be an ImmoScout24 search starting with {prefix}")
+        return url
+
+
 class FilterProfile(BaseModel):
     # extra="forbid": a typo such as "price_mx" is an error, not silently ignored.
     model_config = ConfigDict(extra="forbid", coerce_numbers_to_str=True)
@@ -74,6 +91,7 @@ class FilterProfile(BaseModel):
     include_unknown: bool = True
 
     willhaben: WillhabenSettings = WillhabenSettings()
+    immoscout24: ImmoScout24Settings = ImmoScout24Settings()
 
     @field_validator("energy_class_max")
     @classmethod
