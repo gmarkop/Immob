@@ -46,6 +46,7 @@ ProfileOption = Annotated[
     Path, typer.Option("--profile", "-p", envvar="IMMOB_PROFILE", help="Filter profile (YAML).")
 ]
 DEFAULT_DB = Path("immob.db")
+SOURCES = (WillhabenSource.name, ImmoScout24Source.name)
 DEFAULT_PROFILE = Path("profiles/kaernten.yaml")
 
 
@@ -186,12 +187,24 @@ def notify(
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Don't ask before sending many messages.")
     ] = False,
+    source: Annotated[
+        str | None,
+        typer.Option(help=f"With --resend: only listings from this site ({', '.join(SOURCES)})."),
+    ] = None,
 ) -> None:
     """Send pending notifications without crawling, or with --resend all current matches.
 
-    --resend helps after changing the profile: listings stored earlier that now
-    match were already marked as seen, so they would never be sent otherwise.
+    --resend helps after changing the profile or adding a site: listings stored
+    earlier that now match were already marked as seen, so they would never be
+    sent otherwise. A flat listed on several sites is sent once, as its original
+    listing, so `--source immoscout24` sends the flats only ImmoScout24 has.
     """
+    if source is not None and not resend_matches:
+        console.print("[red]--source only works together with --resend.[/red]")
+        raise typer.Exit(1)
+    if source is not None and source not in SOURCES:
+        console.print(f"[red]Unknown site {source!r}; choose one of: {', '.join(SOURCES)}.[/red]")
+        raise typer.Exit(1)
     profile = _load_profile(profile_path)
     try:
         notifier = TelegramNotifier.from_env()
@@ -204,6 +217,8 @@ def notify(
             return
 
         matches = current_matches(store, profile, max_age_days=max_age_days)
+        if source is not None:
+            matches = [listing for listing in matches if listing.source == source]
         if not matches:
             console.print("No listings match the profile.")
             return

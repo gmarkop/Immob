@@ -370,3 +370,30 @@ def test_duplicates_unlink(monkeypatch, tmp_path):
         assert store.get("immoscout24", "a").duplicate_of is None
     failed = CliRunner().invoke(cli.app, ["duplicates", "--unlink", "willhaben:1"])
     assert failed.exit_code == 1  # an original, not a linked copy
+
+
+def test_resend_from_one_source(monkeypatch, tmp_path):
+    db = str(tmp_path / "test.db")
+    monkeypatch.setenv("IMMOB_DB", db)
+    _linked_pair(db)  # willhaben:1 and its copy immoscout24:a
+    with Storage(db) as store:
+        store.upsert(
+            Listing(source="immoscout24", source_id="b", url="https://is24/b", title="Nur hier",
+                    price_eur=170000, area_m2=60, postal_code="9020")
+        )  # fmt: skip
+        store.mark_all_notified()
+    sent = _capturing_notifier(monkeypatch)
+
+    result = CliRunner().invoke(cli.app, ["notify", "--resend", "--source", "immoscout24"])
+
+    assert result.exit_code == 0, result.output
+    assert "Sent 1 Telegram notifications." in result.output
+    assert "https://is24/b" in sent[0]["text"]  # the flat only ImmoScout24 has
+
+
+def test_source_needs_resend_and_a_known_site(monkeypatch, tmp_path):
+    monkeypatch.setenv("IMMOB_DB", str(tmp_path / "test.db"))
+    result = CliRunner().invoke(cli.app, ["notify", "--source", "immoscout24"])
+    assert result.exit_code == 1 and "only works together with --resend" in result.output
+    result = CliRunner().invoke(cli.app, ["notify", "--resend", "--source", "derstandard"])
+    assert result.exit_code == 1 and "Unknown site" in result.output
