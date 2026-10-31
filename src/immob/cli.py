@@ -6,7 +6,6 @@ import json
 import logging
 import shutil
 import sys
-from datetime import UTC, datetime, timedelta
 from html import escape
 from importlib import resources
 from pathlib import Path
@@ -21,7 +20,7 @@ from immob.filters import FilterProfile, load_profile
 from immob.http import PoliteClient, RobotsDisallowed
 from immob.models import StoredListing, format_eur
 from immob.notify import NotifierError, TelegramNotifier
-from immob.pipeline import run_crawl, send_pending
+from immob.pipeline import current_matches, resend, run_crawl, send_pending
 from immob.sources.base import ParseError, Source
 from immob.sources.willhaben import (
     WillhabenSource,
@@ -138,8 +137,25 @@ def crawl(
 
 
 @app.command()
-def notify(profile_path: ProfileOption = DEFAULT_PROFILE, db: DbOption = DEFAULT_DB) -> None:
-    """Send pending notifications without crawling."""
+def notify(
+    profile_path: ProfileOption = DEFAULT_PROFILE,
+    db: DbOption = DEFAULT_DB,
+    resend_matches: Annotated[
+        bool,
+        typer.Option("--resend", help="Send all current matches, including ones notified before."),
+    ] = False,
+    max_age_days: Annotated[
+        int, typer.Option(help="With --resend: skip listings not seen for this many days.")
+    ] = 7,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Don't ask before sending many messages.")
+    ] = False,
+) -> None:
+    """Send pending notifications without crawling, or with --resend all current matches.
+
+    --resend helps after changing the profile: listings stored earlier that now
+    match were already marked as seen, so they would never be sent otherwise.
+    """
     profile = _load_profile(profile_path)
     try:
         notifier = TelegramNotifier.from_env()
@@ -147,7 +163,23 @@ def notify(profile_path: ProfileOption = DEFAULT_PROFILE, db: DbOption = DEFAULT
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from None
     with Storage(db) as store:
-        _send_notifications(store, profile, notifier)
+        if not resend_matches:
+            _send_notifications(store, profile, notifier)
+            return
+
+        matches = current_matches(store, profile, max_age_days=max_age_days)
+        if not matches:
+            console.print("No listings match the profile.")
+            return
+        if len(matches) > 10 and not yes:
+            typer.confirm(f"Send {len(matches)} Telegram messages?", abort=True)
+        with notifier:
+            try:
+                sent = resend(store, notifier, matches)
+            except NotifierError as exc:
+                console.print(f"[red]{exc}[/red]")
+                raise typer.Exit(1) from None
+        console.print(f"Sent {sent} Telegram notifications.")
 
 
 def _send_notifications(store: Storage, profile: FilterProfile, notifier: TelegramNotifier) -> None:
@@ -257,13 +289,8 @@ def search(
 ) -> None:
     """Show stored listings that match the profile."""
     profile = _load_profile(profile_path)
-    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
     with Storage(db) as store:
-        listings = [
-            listing
-            for listing in store.all()
-            if listing.last_seen >= cutoff and profile.matches(listing)
-        ]
+        listings = current_matches(store, profile, max_age_days=max_age_days)
 
     table = Table(title=f"{len(listings)} listings matching '{profile.name}'")
     for column in (

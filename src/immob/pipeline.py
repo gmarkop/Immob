@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
 from immob.filters import FilterProfile
+from immob.models import StoredListing
 from immob.notify import TelegramNotifier, format_listing
 from immob.sources.base import ParseError, Source
 from immob.storage import Change, Storage
@@ -95,3 +97,27 @@ def send_pending(
         store.mark_notified(listing)
         sent += 1
     return sent
+
+
+def current_matches(
+    store: Storage, profile: FilterProfile, *, max_age_days: int = 7
+) -> list[StoredListing]:
+    """Stored listings that match the profile, cheapest first.
+
+    Listings not seen in the search for `max_age_days` are left out: they are
+    most likely sold or withdrawn.
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+    return [
+        listing
+        for listing in store.all()
+        if listing.last_seen >= cutoff and profile.matches(listing)
+    ]
+
+
+def resend(store: Storage, notifier: TelegramNotifier, listings: list[StoredListing]) -> int:
+    """Send these listings again, whether or not they were notified before."""
+    for listing in listings:
+        notifier.send(format_listing(listing, resent=True))
+        store.mark_notified(listing)
+    return len(listings)

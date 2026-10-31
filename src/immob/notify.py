@@ -82,10 +82,15 @@ class TelegramNotifier:
         self._sleep(1)  # stay well under Telegram's limit of ~1 message/second per chat
 
 
-def format_listing(listing: StoredListing) -> str:
-    """One listing as a Telegram message (HTML subset; all ad text escaped)."""
+def format_listing(listing: StoredListing, *, resent: bool = False) -> str:
+    """One listing as a Telegram message (HTML subset; all ad text escaped).
+
+    `resent` marks a listing sent again on request (`immob notify --resend`).
+    """
     old_price = listing.notified_price
-    if old_price is not None and listing.price_eur is not None and listing.price_eur < old_price:
+    if resent:
+        headline = "🏠 <b>Current match</b>"
+    elif old_price is not None and listing.price_eur is not None and listing.price_eur < old_price:
         drop = 100 * (old_price - listing.price_eur) / old_price
         headline = (
             f"📉 <b>Price drop</b> {format_eur(old_price)} → "
