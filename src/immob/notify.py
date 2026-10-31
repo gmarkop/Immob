@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from html import escape
 
 import httpx
 
-from immob.models import StoredListing, format_eur
+from immob.models import Listing, StoredListing, format_eur
 
 API_URL = "https://api.telegram.org"
 
@@ -82,10 +82,13 @@ class TelegramNotifier:
         self._sleep(1)  # stay well under Telegram's limit of ~1 message/second per chat
 
 
-def format_listing(listing: StoredListing, *, resent: bool = False) -> str:
+def format_listing(
+    listing: StoredListing, *, resent: bool = False, also_on: Sequence[Listing] = ()
+) -> str:
     """One listing as a Telegram message (HTML subset; all ad text escaped).
 
-    `resent` marks a listing sent again on request (`immob notify --resend`).
+    `resent` marks a listing sent again on request (`immob notify --resend`);
+    `also_on` are the same flat's listings on other sites.
     """
     old_price = listing.notified_price
     if resent:
@@ -123,6 +126,9 @@ def format_listing(listing: StoredListing, *, resent: bool = False) -> str:
         costs.append(f"{format_eur(listing.monthly_costs_eur)}/Monat")
     if listing.heating:
         costs.append(f"Heizung: {listing.heating}")
+    if listing.hwb is not None or listing.energy_class:
+        hwb = f"{listing.hwb:g}" if listing.hwb is not None else "?"
+        costs.append(f"HWB {hwb}" + (f" ({listing.energy_class})" if listing.energy_class else ""))
     if listing.building_type:
         features.insert(0, listing.building_type.value.capitalize())
 
@@ -134,6 +140,10 @@ def format_listing(listing: StoredListing, *, resent: bool = False) -> str:
         escape(" · ".join(costs)),
         escape(place),
         escape(" · ".join(f for f in features if f)),
+        " · ".join(
+            f'Auch auf <a href="{escape(other.url)}">{escape(other.source)}</a>'
+            for other in also_on
+        ),
     ]
     return "\n".join(line for line in lines if line)
 

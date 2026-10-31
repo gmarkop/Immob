@@ -12,6 +12,11 @@ floor_min: 1            # 0 = ground floor (EG); 1 = skip the ground floor
 year_built_min: 1970
 building_types: [neubau, altbau]   # Altbau = built before 1945
 
+# Energy certificate (Energieausweis): highest heating demand in kWh/m² per
+# year, and/or the worst acceptable class (A++, A+, A, B, C, D, E, F, G).
+# hwb_max: 100
+# energy_class_max: C
+
 # Count a garage space that costs extra towards price_max:
 price_includes_garage: true
 # monthly_costs_max: 250    # €/month incl. VAT: operating costs, repair reserve, ...

@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
+from immob.dedup import find_original
 from immob.filters import FilterProfile
 from immob.models import StoredListing
 from immob.notify import TelegramNotifier, format_listing
@@ -27,6 +28,10 @@ class CrawlStats:
     total_found: int | None = None  # what the site reports for the whole search
     # The search itself failed (not just a detail page): the site may have changed.
     search_failed: bool = False
+    # Every listing of the search was read, so missing ones can count as gone.
+    complete: bool = False
+    gone: int = 0
+    duplicates: int = 0
 
 
 def run_crawl(
@@ -45,9 +50,11 @@ def run_crawl(
     the parser learned new fields.
     """
     stats = CrawlStats()
+    seen_ids: set[str] = set()
     try:
         for listing in source.search(max_pages):
             stats.seen += 1
+            seen_ids.add(listing.source_id)
             stored = store.get(*listing.key)
 
             # Detail pages cost one slow request each, so only fetch them for
@@ -70,6 +77,12 @@ def run_crawl(
             change = store.upsert(listing)
             if change is Change.NEW:
                 stats.new += 1
+                if original := find_original(store, listing):
+                    # Already known from another site: link it, and don't
+                    # announce it as new. Its price drops are still notified.
+                    store.set_duplicate_of(listing, original)
+                    store.mark_notified(listing)
+                    stats.duplicates += 1
             elif change is Change.PRICE_CHANGED:
                 stats.price_changed += 1
     except (httpx.HTTPError, ParseError) as exc:
@@ -78,6 +91,16 @@ def run_crawl(
         stats.errors += 1
         stats.search_failed = True
     stats.total_found = source.total_found
+
+    # Only a crawl that read the whole search can tell what's gone: after a
+    # partial one, a missing listing may just be on a page that wasn't read.
+    stats.complete = (
+        not stats.search_failed
+        and stats.total_found is not None
+        and stats.seen >= stats.total_found
+    )
+    if stats.complete:
+        stats.gone = store.mark_gone(source.name, seen_ids)
     return stats
 
 
@@ -93,7 +116,7 @@ def send_pending(
     pending = [listing for listing in store.pending_notifications() if profile.matches(listing)]
     sent = 0
     for listing in pending[:limit]:
-        notifier.send(format_listing(listing))
+        notifier.send(format_listing(listing, also_on=store.duplicates_of(listing)))
         store.mark_notified(listing)
         sent += 1
     return sent
@@ -102,22 +125,29 @@ def send_pending(
 def current_matches(
     store: Storage, profile: FilterProfile, *, max_age_days: int = 7
 ) -> list[StoredListing]:
-    """Stored listings that match the profile, cheapest first.
+    """Stored listings that match the profile, cheapest first, one per flat.
 
-    Listings not seen in the search for `max_age_days` are left out: they are
-    most likely sold or withdrawn.
+    Left out: listings that are gone or haven't been seen for `max_age_days`
+    (most likely sold), and copies of a flat whose original listing is still
+    active. When the original is gone, the copy on the other site takes over.
     """
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+    listings = store.all()
+    active = {
+        listing.ref
+        for listing in listings
+        if listing.gone_at is None and listing.last_seen >= cutoff
+    }
     return [
         listing
-        for listing in store.all()
-        if listing.last_seen >= cutoff and profile.matches(listing)
+        for listing in listings
+        if listing.ref in active and listing.duplicate_of not in active and profile.matches(listing)
     ]
 
 
 def resend(store: Storage, notifier: TelegramNotifier, listings: list[StoredListing]) -> int:
     """Send these listings again, whether or not they were notified before."""
     for listing in listings:
-        notifier.send(format_listing(listing, resent=True))
+        notifier.send(format_listing(listing, resent=True, also_on=store.duplicates_of(listing)))
         store.mark_notified(listing)
     return len(listings)

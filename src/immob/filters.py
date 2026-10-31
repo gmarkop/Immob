@@ -11,7 +11,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from immob.models import BuildingType, Listing
+from immob.models import ENERGY_CLASSES, BuildingType, Listing
 
 # "required": must have it, "excluded": must not have it, "any": don't care.
 Requirement = Literal["required", "excluded", "any"]
@@ -64,6 +64,9 @@ class FilterProfile(BaseModel):
     cellar: Requirement = "any"
     commission_free: Requirement = "any"
     postal_code_prefixes: list[str] | None = None
+    # Energy certificate: highest heating demand (kWh/m² per year) or worst class.
+    hwb_max: float | None = None
+    energy_class_max: str | None = None
     exclude_keywords: list[str] = []
 
     # What to do when an ad doesn't state something you filter on. True keeps
@@ -71,6 +74,13 @@ class FilterProfile(BaseModel):
     include_unknown: bool = True
 
     willhaben: WillhabenSettings = WillhabenSettings()
+
+    @field_validator("energy_class_max")
+    @classmethod
+    def _known_energy_class(cls, value: str | None) -> str | None:
+        if value is not None and value.upper() not in ENERGY_CLASSES:
+            raise ValueError(f"must be one of {', '.join(ENERGY_CLASSES)}")
+        return value.upper() if value else value
 
     def matches(self, listing: Listing, *, include_unknown: bool | None = None) -> bool:
         return not self.rejections(listing, include_unknown=include_unknown)
@@ -109,6 +119,7 @@ class FilterProfile(BaseModel):
         check_range("rooms", listing.rooms, self.rooms_min, self.rooms_max)
         check_range("floor", listing.floor, self.floor_min, self.floor_max)
         check_range("year built", listing.year_built, self.year_built_min, self.year_built_max)
+        check_range("HWB", listing.hwb, None, self.hwb_max)
         check_requirement("parking", listing.has_parking, self.parking)
         check_requirement("garage", listing.has_garage, self.garage)
         check_requirement("elevator", listing.has_elevator, self.elevator)
@@ -122,6 +133,15 @@ class FilterProfile(BaseModel):
                     reasons.append("building type unknown")
             elif listing.building_type not in self.building_types:
                 reasons.append(f"building type {listing.building_type}")
+
+        if self.energy_class_max:
+            # Compare positions in ENERGY_CLASSES: A++ is 0, G is 8.
+            classes = list(ENERGY_CLASSES)
+            if listing.energy_class not in classes:
+                if not keep_unknown:
+                    reasons.append("energy class unknown")
+            elif classes.index(listing.energy_class) > classes.index(self.energy_class_max):
+                reasons.append(f"energy class {listing.energy_class}")
 
         if self.postal_code_prefixes:
             if listing.postal_code is None:

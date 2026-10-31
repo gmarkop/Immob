@@ -1,6 +1,7 @@
 """End-to-end: the CLI commands against a fake willhaben."""
 
 import json
+import os
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ from immob import cli
 from immob.filters import FilterProfile
 from immob.notify import TelegramNotifier
 from immob.sources.willhaben import WillhabenSource
+from immob.storage import Storage
 from tests.conftest import advert, detail_page, next_data_page, search_page
 
 ADS = [
@@ -208,3 +210,21 @@ def test_notify_resend_asks_before_many_messages(runner, monkeypatch):
     assert "Send 11 Telegram messages?" in result.output
     assert result.exit_code == 1  # aborted
     assert sent == []
+
+
+def test_gone_lists_listings_that_left_the_search(runner):
+    runner.invoke(cli.app, ["crawl", "--no-notify"])
+    with Storage(os.environ["IMMOB_DB"]) as store:
+        store.mark_gone("willhaben", seen_ids={"2"})  # listing 1 left the search
+
+    result = runner.invoke(cli.app, ["gone"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 listings gone in the last 30 days" in result.output
+    assert "€ 180.000" in result.output
+    assert "Gone" in runner.invoke(cli.app, ["show", "1"]).output
+
+
+def test_crawl_reports_gone_after_complete_crawl(runner):
+    result = runner.invoke(cli.app, ["crawl", "--no-notify"])
+    assert "0 gone, 0 already known from another site." in result.output

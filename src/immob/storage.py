@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS listings (
     monthly_costs_eur REAL,
     commission_free INTEGER,
     commission_text TEXT,
+    hwb             REAL,
+    energy_class    TEXT,
     postal_code     TEXT,
     location        TEXT,
     description     TEXT,
@@ -48,6 +50,8 @@ CREATE TABLE IF NOT EXISTS listings (
     last_seen       TEXT NOT NULL,
     notified_price  INTEGER,
     notified_at     TEXT,
+    gone_at         TEXT,
+    duplicate_of    TEXT,
     PRIMARY KEY (source, source_id)
 );
 
@@ -71,6 +75,10 @@ _ADDED_COLUMNS = {
     "heating_costs_eur": "REAL",
     "monthly_costs_eur": "REAL",
     "commission_text": "TEXT",
+    "hwb": "REAL",
+    "energy_class": "TEXT",
+    "gone_at": "TEXT",
+    "duplicate_of": "TEXT",
 }
 
 # Listing fields stored as plain columns. Column names come from our own model,
@@ -161,7 +169,8 @@ class Storage:
             self._conn.execute(
                 f"UPDATE listings SET {assignments}, "
                 "details_fetched = MAX(?, details_fetched), "
-                "raw_json = COALESCE(?, raw_json), last_seen = ? "
+                # Seen again, so not gone (any more).
+                "raw_json = COALESCE(?, raw_json), last_seen = ?, gone_at = NULL "
                 "WHERE source = ? AND source_id = ?",
                 [*data, listing.details_fetched, raw_json, now.isoformat(), *listing.key],
             )
@@ -184,6 +193,29 @@ class Storage:
                 [(now or _now()).isoformat(), *listing.key],
             )
 
+    def mark_gone(self, source: str, seen_ids: set[str], now: datetime | None = None) -> int:
+        """Mark the source's listings that a complete crawl didn't see as gone."""
+        stored = {
+            row["source_id"]
+            for row in self._conn.execute(
+                "SELECT source_id FROM listings WHERE source = ? AND gone_at IS NULL", [source]
+            )
+        }
+        missing = stored - seen_ids
+        with self._conn:
+            self._conn.executemany(
+                "UPDATE listings SET gone_at = ? WHERE source = ? AND source_id = ?",
+                [((now or _now()).isoformat(), source, source_id) for source_id in missing],
+            )
+        return len(missing)
+
+    def set_duplicate_of(self, listing: Listing, original: Listing) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE listings SET duplicate_of = ? WHERE source = ? AND source_id = ?",
+                [original.ref, *listing.key],
+            )
+
     def mark_all_notified(self, now: datetime | None = None) -> int:
         """Treat everything stored so far as already notified (first-run seeding)."""
         with self._conn:
@@ -204,6 +236,35 @@ class Storage:
 
     def all(self) -> list[StoredListing]:
         rows = self._conn.execute("SELECT * FROM listings ORDER BY price_eur").fetchall()
+        return [_to_listing(row) for row in rows]
+
+    def get_ref(self, ref: str) -> StoredListing | None:
+        source, _, source_id = ref.partition(":")
+        return self.get(source, source_id)
+
+    def duplicate_candidates(self, listing: Listing, tolerance: float) -> list[StoredListing]:
+        """Active, original listings from other sources with a similar area."""
+        if listing.area_m2 is None:
+            return []
+        low, high = listing.area_m2 * (1 - tolerance), listing.area_m2 * (1 + tolerance)
+        rows = self._conn.execute(
+            "SELECT * FROM listings WHERE source != ? AND gone_at IS NULL "
+            "AND duplicate_of IS NULL AND area_m2 BETWEEN ? AND ?",
+            [listing.source, low, high],
+        ).fetchall()
+        return [_to_listing(row) for row in rows]
+
+    def duplicates_of(self, listing: Listing) -> list[StoredListing]:
+        """The same flat on other sites."""
+        rows = self._conn.execute(
+            "SELECT * FROM listings WHERE duplicate_of = ?", [listing.ref]
+        ).fetchall()
+        return [_to_listing(row) for row in rows]
+
+    def gone_since(self, since: datetime) -> list[StoredListing]:
+        rows = self._conn.execute(
+            "SELECT * FROM listings WHERE gone_at >= ? ORDER BY gone_at DESC", [since.isoformat()]
+        ).fetchall()
         return [_to_listing(row) for row in rows]
 
     def pending_notifications(self) -> list[StoredListing]:

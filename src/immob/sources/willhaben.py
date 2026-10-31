@@ -71,6 +71,8 @@ ATTRIBUTE_NAMES: dict[str, tuple[str, ...]] = {
     "monthly_costs": ("ESTATE_PRICE/MONTHCOSTS_GROSS",),
     # The commission ("Maklerprovision" on the page), e.g. "3% des Kaufpreises zzgl. 20% USt."
     "commission": ("ADDITIONAL_COST/FEE",),
+    "hwb": ("ENERGY_HWB",),
+    "energy_class": ("ENERGY_HWB_CLASS",),
 }
 # Attributes holding lists of names: features ("Keller", "Fahrstuhl"; numeric
 # codes on search pages) and outdoor areas ("Balkon", "Garten").
@@ -264,6 +266,8 @@ def _parse_structured(
         description=_description(first("description"), attrs),
         is_private=None if is_private is None else is_private == "1",
         heating=first("heating"),
+        hwb=parse_number(first("hwb")),
+        energy_class=(first("energy_class") or "").upper() or None,
         heating_costs_eur=parse_number(first("heating_costs")),
         monthly_costs_eur=parse_number(first("monthly_costs")),
         commission_text=commission,

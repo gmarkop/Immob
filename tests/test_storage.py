@@ -106,3 +106,33 @@ def test_old_database_gets_new_columns(tmp_path):
         assert storage.get("willhaben", "1").has_garage is None  # old row still readable
         storage.upsert(listing("1", has_garage=True, garage_price_eur=18000))
         assert storage.get("willhaben", "1").garage_price_eur == 18000
+
+
+def test_mark_gone_and_reappear(store):
+    store.upsert(listing("1"), now=T0)
+    store.upsert(listing("2"), now=T0)
+    store.upsert(Listing(source="other", source_id="9", url="u", title="t"), now=T0)
+
+    assert store.mark_gone("willhaben", seen_ids={"1"}, now=T0 + timedelta(days=3)) == 1
+    gone = store.get("willhaben", "2")
+    assert gone.gone_at == T0 + timedelta(days=3)
+    assert gone.days_online == 3
+    assert store.get("other", "9").gone_at is None  # other sources untouched
+    assert [item.source_id for item in store.gone_since(T0)] == ["2"]
+
+    store.upsert(listing("2"), now=T0 + timedelta(days=4))  # listed again
+    assert store.get("willhaben", "2").gone_at is None
+
+
+def test_duplicate_links(store):
+    original = listing("1", area_m2=54)
+    copy = Listing(source="immoscout24", source_id="a", url="u", title="t", area_m2=54)
+    store.upsert(original)
+    store.upsert(copy)
+    assert [c.source_id for c in store.duplicate_candidates(copy, 0.03)] == ["1"]
+
+    store.set_duplicate_of(copy, original)
+
+    assert store.get("immoscout24", "a").duplicate_of == "willhaben:1"
+    assert [c.source_id for c in store.duplicates_of(original)] == ["a"]
+    assert store.get_ref("willhaben:1").source_id == "1"

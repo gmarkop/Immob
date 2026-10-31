@@ -53,8 +53,9 @@ so a wrong name means less precise data, not a crash.
 `profiles/kaernten.yaml` holds your criteria: price (optionally including a
 garage space that costs extra), monthly costs, size, rooms, floor, year built,
 old/new building, garage (covered: garage or Tiefgarage), any parking, elevator,
-balcony/terrace, cellar, commission, postal codes and words to exclude (e.g.
-*Baurecht*). The comments in the file explain each option.
+balcony/terrace, cellar, commission, energy certificate (`hwb_max`,
+`energy_class_max`), postal codes and words to exclude (e.g. *Baurecht*). The
+comments in the file explain each option.
 
 By default the crawler reads all apartments in Kärnten in willhaben's default
 order, a few pages per run, and filters them on your machine. It's better to
@@ -228,6 +229,7 @@ After an update that changes the unit files, run `immob install-service` and
 |---|---|
 | `immob crawl` | Fetch listings, store them, send notifications. `--seed` for the first run, `--no-notify` to skip Telegram, `--pages N`, `--no-details`, `--refresh-details` to re-read detail pages after an update, `--cache-dir DIR` while developing. |
 | `immob search` | Table of stored listings that match the profile. |
+| `immob gone` | Listings that left the search in the last 30 days (`--days N`): how long they were online, price changes, last price. `--all` includes listings that don't match the profile. |
 | `immob show ID` | One listing with price history and the filter verdict. `--text` also prints the ad's text, to see where yes/no/? values came from. |
 | `immob notify` | Send pending notifications without crawling. `--resend` sends all current matches again, e.g. after changing the profile (asks first if there are more than 10). |
 | `immob telegram-test` | Check the Telegram setup. |
@@ -254,6 +256,7 @@ SQLite (listings + price_history) ◄──────────────�
 | `models.py` | `Listing`, the one normalized shape every source produces. `None` means "the ad doesn't say", which differs from `False`/`0`. |
 | `sources/base.py` | The `Source` interface. A new portal is a new class with `search()` and `fetch_details()`. |
 | `sources/willhaben.py` | Reads the JSON in willhaben's `__NEXT_DATA__` script tag rather than the visible HTML. |
+| `dedup.py` | Recognizes the same flat on two sites (same postal code, area within 3 %, same rooms, price within 5 %), so it's announced once. |
 | `extract.py` | Regexes that find floor, year built, parking, elevator and commission in German ad text. |
 | `http.py` | A polite HTTP client: obeys robots.txt, waits 3–5 s between requests, backs off on errors. |
 | `storage.py` | SQLite with plain SQL. Updates never overwrite known values with unknowns (`COALESCE`). |
@@ -261,6 +264,23 @@ SQLite (listings + price_history) ◄──────────────�
 | `pipeline.py` | The crawl and notify steps. Detail pages are fetched only for possible matches. |
 | `notify.py` | Telegram messages; errors are cleaned so the bot token never shows up in logs. |
 | `cli.py` | The `immob` command (Typer). |
+
+## Gone listings and duplicates
+
+**Gone.** After a crawl that read the whole search (`Seen 53 of 53`), listings
+from that site that weren't in it get a "gone" date: sold, reserved, or
+withdrawn. `immob gone` lists them with how long they were online and their
+price history, which shows how fast flats in your price range sell. A
+listing that comes back loses its gone date. A crawl that didn't read all
+pages marks nothing, since a missing listing may just be on an unread page.
+"Gone" means gone from *your search*: narrowing the search URL makes the
+listings outside it count as gone too.
+
+**Duplicates.** When a site lists a flat already known from another site,
+the new listing is linked to the earlier one instead of being announced again.
+`immob show` names the other listing, and Telegram messages add "Auch auf …"
+links. If the original listing goes but the copy is still online, the copy
+takes its place in `immob search`.
 
 ## Being a good citizen
 
