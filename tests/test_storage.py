@@ -136,3 +136,20 @@ def test_duplicate_links(store):
     assert store.get("immoscout24", "a").duplicate_of == "willhaben:1"
     assert [c.source_id for c in store.duplicates_of(original)] == ["a"]
     assert store.get_ref("willhaben:1").source_id == "1"
+
+
+def test_duplicate_groups_and_unlink(store):
+    original = listing("1", area_m2=54)
+    copy = Listing(source="immoscout24", source_id="a", url="u", title="t", area_m2=54)
+    store.upsert(original)
+    store.upsert(copy)
+    store.upsert(listing("2"))  # a flat on one site only
+    store.set_duplicate_of(copy, original)
+
+    [(group_original, copies)] = store.duplicate_groups()
+    assert group_original.ref == "willhaben:1"
+    assert [c.ref for c in copies] == ["immoscout24:a"]
+
+    store.unlink_duplicate(copy)
+    assert store.duplicate_groups() == []
+    assert store.get("immoscout24", "a").duplicate_of is None
