@@ -17,6 +17,25 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+# Austrian energy certificate classes, best first, with the highest HWB
+# (Heizwärmebedarf, kWh/m² per year) each allows; G is anything above 250.
+ENERGY_CLASSES: dict[str, float] = {
+    "A++": 10,
+    "A+": 15,
+    "A": 25,
+    "B": 50,
+    "C": 100,
+    "D": 150,
+    "E": 200,
+    "F": 250,
+    "G": float("inf"),
+}
+
+
+def energy_class_for(hwb: float) -> str:
+    """The class an HWB value falls into, e.g. 72 -> "C"."""
+    return next(name for name, limit in ENERGY_CLASSES.items() if hwb <= limit)
+
 
 class BuildingType(StrEnum):
     # Austrian convention: "Altbau" is a building from before 1945.
@@ -50,6 +69,8 @@ class Listing(BaseModel):
     monthly_costs_eur: float | None = None  # per month, gross: operating costs, reserve, ...
     commission_free: bool | None = None
     commission_text: str | None = None  # as written, e.g. "3% des Kaufpreises zzgl. 20% USt."
+    hwb: float | None = None  # heating demand from the energy certificate, kWh/m² per year
+    energy_class: str | None = None  # "A++" … "G", see ENERGY_CLASSES
     postal_code: str | None = None
     location: str | None = None
     description: str | None = None
@@ -65,6 +86,11 @@ class Listing(BaseModel):
     @property
     def key(self) -> tuple[str, str]:
         return (self.source, self.source_id)
+
+    @property
+    def ref(self) -> str:
+        """The key as one string, e.g. "willhaben:858253157"."""
+        return f"{self.source}:{self.source_id}"
 
     @property
     def price_per_m2(self) -> float | None:
@@ -112,6 +138,15 @@ class StoredListing(Listing):
     # Price at the time we last sent a notification; used to detect price drops.
     notified_price: int | None = None
     notified_at: datetime | None = None
+    # Set when a complete crawl no longer found the listing in the search.
+    gone_at: datetime | None = None
+    # The `ref` of the same flat listed earlier on another site.
+    duplicate_of: str | None = None
+
+    @property
+    def days_online(self) -> int:
+        """Days from first seen until gone (or until last seen, if still listed)."""
+        return ((self.gone_at or self.last_seen) - self.first_seen).days
 
 
 def format_eur(amount: float | None, *, cents: bool = False) -> str:

@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from datetime import date
 
-from immob.models import BuildingType, Listing
+from immob.models import BuildingType, Listing, energy_class_for
 
 # --- Numbers -----------------------------------------------------------------
 
@@ -261,6 +261,36 @@ def extract_heating(text: str) -> str | None:
     return None
 
 
+# --- Energy certificate ------------------------------------------------------
+
+# "HWB: 72 kWh/m²a", "HWB-Wert 45,3", "HWB Ref,SK: 72". Only separators may come
+# between "HWB" and the number, so "HWB: C, fGEE: 1,1" doesn't read 1.1 as HWB.
+_HWB = re.compile(
+    r"\bHWB(?:[- ]?Wert)?[\s:=\-]*(?:\(?Ref\.?,?\s*SK\)?[\s:=\-]*)?(?:ca\.?\s*)?"
+    r"(\d{1,3}(?:[.,]\d{1,2})?)(?![\d.,]*\s*%)",
+    re.IGNORECASE,
+)
+# "Energieklasse: B", "HWB-Klasse C", "Energieeffizienzklasse A+"
+_ENERGY_CLASS = re.compile(
+    r"\b(?:HWB|Energie(?:effizienz)?)[- ]?klasse\s*:?\s*(A\+\+|A\+|[A-G])(?![\w+])",
+    re.IGNORECASE,
+)
+
+
+def extract_hwb(text: str) -> float | None:
+    for match in _HWB.finditer(text):
+        value = float(match.group(1).replace(",", "."))
+        if 5 <= value <= 500:  # plausible kWh/m² per year
+            return value
+    return None
+
+
+def extract_energy_class(text: str) -> str | None:
+    if match := _ENERGY_CLASS.search(text):
+        return match.group(1).upper()
+    return None
+
+
 # --- Commission --------------------------------------------------------------
 
 _COMMISSION_FREE = re.compile(
@@ -339,6 +369,15 @@ def fill_from_text(listing: Listing, text: str | None = None) -> Listing:
         updates["has_cellar"] = extract_cellar(text)
     if listing.heating is None:
         updates["heating"] = extract_heating(text)
+    hwb = listing.hwb
+    if hwb is None:
+        hwb = updates["hwb"] = extract_hwb(text)
+    if listing.energy_class is None:
+        # The certificate's class follows from the HWB value when it isn't stated.
+        energy_class = extract_energy_class(text)
+        if energy_class is None and hwb is not None:
+            energy_class = energy_class_for(hwb)
+        updates["energy_class"] = energy_class
     if listing.commission_free is None:
         commission_free = extract_commission_free(text)
         # Private sellers don't charge a commission unless they say otherwise.

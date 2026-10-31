@@ -6,6 +6,7 @@ import json
 import logging
 import shutil
 import sys
+from datetime import UTC, datetime, timedelta
 from html import escape
 from importlib import resources
 from pathlib import Path
@@ -18,7 +19,7 @@ from rich.table import Table
 
 from immob.filters import FilterProfile, load_profile
 from immob.http import PoliteClient, RobotsDisallowed
-from immob.models import StoredListing, format_eur
+from immob.models import Listing, StoredListing, format_eur
 from immob.notify import NotifierError, TelegramNotifier
 from immob.pipeline import current_matches, resend, run_crawl, send_pending
 from immob.sources.base import ParseError, Source
@@ -120,6 +121,10 @@ def crawl(
             f"{seen}: {stats.new} new, {stats.price_changed} price changes, "
             f"{stats.details_fetched} detail pages fetched."
         )
+        if stats.complete:
+            console.print(f"{stats.gone} gone, {stats.duplicates} already known from another site.")
+        elif not stats.search_failed:
+            console.print("Not all pages read, so gone listings weren't checked.")
         if stats.errors:
             console.print(f"[yellow]{stats.errors} errors, run with -v for details.[/yellow]")
 
@@ -325,6 +330,46 @@ def search(
 
 
 @app.command()
+def gone(
+    profile_path: ProfileOption = DEFAULT_PROFILE,
+    db: DbOption = DEFAULT_DB,
+    days: Annotated[int, typer.Option(help="Show listings gone in the last N days.")] = 30,
+    show_all: Annotated[
+        bool, typer.Option("--all", help="Include listings that don't match the profile.")
+    ] = False,
+) -> None:
+    """Listings that left the search: how long they were online, and at what price."""
+    profile = _load_profile(profile_path)
+    since = datetime.now(UTC) - timedelta(days=days)
+    with Storage(db) as store:
+        listings = [
+            listing for listing in store.gone_since(since) if show_all or profile.matches(listing)
+        ]
+        histories = {listing.ref: store.price_history(*listing.key) for listing in listings}
+
+    table = Table(title=f"{len(listings)} listings gone in the last {days} days")
+    for column in ("ID", "Last price", "Price changes", "Online", "Gone", "Rooms", "m²"):
+        table.add_column(column, no_wrap=True)
+    table.add_column("Place", overflow="ellipsis", no_wrap=True)
+    for listing in listings:
+        prices = [price for _, price in histories[listing.ref] if price is not None]
+        change = "–"
+        if len(prices) > 1:
+            change = f"{len(prices) - 1}× ({format_eur(prices[0])} → {format_eur(prices[-1])})"
+        table.add_row(
+            f"[link={listing.url}]{listing.source_id}[/link]",
+            format_eur(listing.price_eur),
+            change,
+            f"{listing.days_online} days",
+            f"{listing.gone_at:%Y-%m-%d}",
+            _num(listing.rooms),
+            _num(listing.area_m2),
+            " ".join(filter(None, [listing.postal_code, listing.location])),
+        )
+    console.print(table)
+
+
+@app.command()
 def show(
     source_id: str,
     source: str = WillhabenSource.name,
@@ -340,8 +385,13 @@ def show(
             console.print(f"[red]No listing {source}/{source_id} in {db}[/red]")
             raise typer.Exit(1)
         history = store.price_history(source, source_id)
+        original = store.get_ref(listing.duplicate_of) if listing.duplicate_of else None
+        copies = store.duplicates_of(listing)
 
     _print_listing(listing)
+    for label, other in [("Same flat as", original)] + [("Also listed as", c) for c in copies]:
+        if other is not None:
+            console.print(f"  {label:<20}{other.source} {other.source_id}: {other.url}")
     if text:
         # The text the yes/no/? fields were extracted from (markup=False: ad
         # text may contain [brackets] that rich would read as formatting).
@@ -462,6 +512,7 @@ def _print_listing(listing: StoredListing) -> None:
         "Monthly costs": _eur_cents(listing.monthly_costs_eur, "gross"),
         "Heating costs": _eur_cents(listing.heating_costs_eur, "net"),
         "Heating": listing.heating or "?",
+        "Energy (HWB)": _energy(listing),
         "Rooms": _num(listing.rooms),
         "Floor": listing.floor_display or "?",
         "Year built": listing.year_built or "?",
@@ -476,6 +527,7 @@ def _print_listing(listing: StoredListing) -> None:
         "Place": " ".join(filter(None, [listing.postal_code, listing.location])) or "?",
         "First seen": f"{listing.first_seen:%Y-%m-%d}",
         "Last seen": f"{listing.last_seen:%Y-%m-%d}",
+        "Gone": f"{listing.gone_at:%Y-%m-%d}" if listing.gone_at else "no, still listed",
         "Detail page parsed": _yes_no(listing.details_fetched),
     }
     for label, value in fields.items():
@@ -484,6 +536,13 @@ def _print_listing(listing: StoredListing) -> None:
 
 def _eur_cents(amount: float | None, note: str) -> str:
     return "?" if amount is None else f"{format_eur(amount, cents=True)} per month ({note})"
+
+
+def _energy(listing: Listing) -> str:
+    if listing.hwb is None and listing.energy_class is None:
+        return "?"
+    hwb = f"{listing.hwb:g} kWh/m²a" if listing.hwb is not None else "HWB ?"
+    return f"{hwb} (class {listing.energy_class or '?'})"
 
 
 def _num(value: float | None) -> str:

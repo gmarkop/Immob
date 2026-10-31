@@ -348,3 +348,5 @@ def test_parse_real_detail_with_fee():
     assert listing.has_cellar is True
     assert listing.has_elevator is False  # "Lift ist keiner vorhanden"
     assert listing.has_garage is None  # not mentioned
+    assert listing.hwb == 72
+    assert listing.energy_class == "C"  # no class field: derived from HWB 72

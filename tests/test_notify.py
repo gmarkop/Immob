@@ -94,3 +94,10 @@ def test_errors_never_contain_the_token():
         notifier.send("hello")
     assert "SECRET" not in str(exc_info.value)
     assert exc_info.value.__suppress_context__  # original httpx error hidden from tracebacks
+
+
+def test_format_shows_energy_and_other_sites():
+    copy = stored(source="immoscout24", source_id="a", url="https://is24.example/a")
+    text = format_listing(stored(hwb=72, energy_class="C"), also_on=[copy])
+    assert "HWB 72 (C)" in text
+    assert 'Auch auf <a href="https://is24.example/a">immoscout24</a>' in text

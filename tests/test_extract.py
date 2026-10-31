@@ -6,17 +6,19 @@ from immob.extract import (
     extract_cellar,
     extract_commission_free,
     extract_elevator,
+    extract_energy_class,
     extract_floor,
     extract_garage,
     extract_garage_price,
     extract_heating,
+    extract_hwb,
     extract_parking,
     extract_year_built,
     fill_from_text,
     parse_commission_fee,
     parse_number,
 )
-from immob.models import BuildingType, Listing
+from immob.models import BuildingType, Listing, energy_class_for
 
 
 @pytest.mark.parametrize(
@@ -265,3 +267,48 @@ def test_extract_heating(text, expected):
 )
 def test_parse_commission_fee(fee, expected):
     assert parse_commission_fee(fee) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("HWB: 72 kWh/m²a", 72),
+        ("HWB-Wert 45,3", 45.3),
+        ("HWB Ref,SK: 61", 61),
+        ("HWB 72 fGEE 1,1", 72),
+        ("HWB: C, fGEE: 1,1", None),  # a class and another value, but no HWB number
+        ("Energieausweis liegt vor", None),
+        ("HWB: 2", None),  # implausible
+    ],
+)
+def test_extract_hwb(text, expected):
+    assert extract_hwb(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Energieklasse: B", "B"),
+        ("HWB-Klasse C", "C"),
+        ("Energieeffizienzklasse A+", "A+"),
+        ("Energieklasse A++", "A++"),
+        ("Klasse: Business", None),
+    ],
+)
+def test_extract_energy_class(text, expected):
+    assert extract_energy_class(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("hwb", "expected"),
+    [(8, "A++"), (10, "A++"), (12, "A+"), (25, "A"), (49.9, "B"), (72, "C"), (251, "G")],
+)
+def test_energy_class_for(hwb, expected):
+    assert energy_class_for(hwb) == expected
+
+
+def test_fill_from_text_derives_energy_class_from_hwb():
+    filled = fill_from_text(_listing(description="HWB 72 kWh/m²a"))
+    assert (filled.hwb, filled.energy_class) == (72, "C")
+    stated = fill_from_text(_listing(description="HWB 72, Energieklasse B"))
+    assert stated.energy_class == "B"  # a stated class wins over the derived one

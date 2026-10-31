@@ -136,3 +136,59 @@ def test_resend_includes_listings_notified_before(store):
     matches = current_matches(store, FilterProfile())
     assert resend(store, notifier, matches) == 1
     assert "Current match" in sent_texts[0]
+
+
+def test_complete_crawl_marks_missing_listings_gone(store):
+    run_crawl(FakeSource([make("a", 1), make("b", 1)]), store, FilterProfile(), max_pages=1)
+
+    source = FakeSource([make("a", 1)])
+    source.total_found = 1  # the site reports one listing, and we read it
+    stats = run_crawl(source, store, FilterProfile(), max_pages=1)
+
+    assert (stats.complete, stats.gone) == (True, 1)
+    assert store.get("fake", "b").gone_at is not None
+    assert [m.source_id for m in current_matches(store, FilterProfile())] == ["a"]
+
+
+def test_partial_crawl_marks_nothing_gone(store):
+    run_crawl(FakeSource([make("a", 1), make("b", 1)]), store, FilterProfile(), max_pages=1)
+
+    source = FakeSource([make("a", 1)])
+    source.total_found = 2  # one listing is on a page we didn't read
+    stats = run_crawl(source, store, FilterProfile(), max_pages=1)
+
+    assert (stats.complete, stats.gone) == (False, 0)
+    assert store.get("fake", "b").gone_at is None
+
+
+def _flat(source_name: str, source_id: str) -> Listing:
+    return Listing(
+        source=source_name,
+        source_id=source_id,
+        url=f"https://x/{source_name}/{source_id}",
+        title="2-Zimmer-Wohnung",
+        price_eur=199000,
+        area_m2=54,
+        rooms=2,
+        postal_code="9500",
+    )
+
+
+def test_same_flat_on_second_site_is_linked_not_announced(store):
+    willhaben = FakeSource([_flat("willhaben", "1")])
+    willhaben.name = "willhaben"
+    run_crawl(willhaben, store, FilterProfile(), max_pages=1)
+
+    immoscout = FakeSource([_flat("immoscout24", "a")])
+    immoscout.name = "immoscout24"
+    stats = run_crawl(immoscout, store, FilterProfile(), max_pages=1)
+
+    assert stats.duplicates == 1
+    copy = store.get("immoscout24", "a")
+    assert copy.duplicate_of == "willhaben:1"
+    assert [p.ref for p in store.pending_notifications()] == ["willhaben:1"]  # one flat
+    assert [m.ref for m in current_matches(store, FilterProfile())] == ["willhaben:1"]
+
+    # The willhaben listing goes; the flat is still on ImmoScout24.
+    store.mark_gone("willhaben", seen_ids=set())
+    assert [m.ref for m in current_matches(store, FilterProfile())] == ["immoscout24:a"]

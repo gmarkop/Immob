@@ -94,3 +94,16 @@ def test_price_can_include_an_extra_cost_garage():
     assert not FilterProfile(price_max=220000, price_includes_garage=True).matches(flat)
     included = listing(price_eur=210000, has_garage=True, garage_price_eur=0)
     assert FilterProfile(price_max=220000, price_includes_garage=True).matches(included)
+
+
+def test_energy_filters():
+    profile = FilterProfile(hwb_max=100, energy_class_max="c")
+    assert profile.energy_class_max == "C"
+    assert profile.matches(listing(hwb=72, energy_class="C"))
+    assert profile.matches(listing(hwb=40, energy_class="A+"))
+    assert profile.rejections(listing(hwb=130, energy_class="D")) == [
+        "HWB 130 > 100",
+        "energy class D",
+    ]
+    with pytest.raises(ValidationError, match="must be one of"):
+        FilterProfile(energy_class_max="Z")
