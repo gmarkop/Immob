@@ -232,7 +232,7 @@ After an update that changes the unit files, run `immob install-service` and
 | `immob duplicates` | Flats listed on more than one site, with each listing's link; flags price differences between sites. `--unlink REF` undoes a wrong match. |
 | `immob gone` | Listings that left the search in the last 30 days (`--days N`): how long they were online, price changes, last price. `--all` includes listings that don't match the profile. |
 | `immob show ID` | One listing with price history and the filter verdict. `--text` also prints the ad's text, to see where yes/no/? values came from. |
-| `immob notify` | Send pending notifications without crawling. `--resend` sends all current matches again, e.g. after changing the profile (asks first if there are more than 10). |
+| `immob notify` | Send pending notifications without crawling. `--resend` sends all current matches again, e.g. after changing the profile (asks first if there are more than 10); `--source immoscout24` limits it to one site. |
 | `immob telegram-test` | Check the Telegram setup. |
 | `immob alert MESSAGE` | Send an alert to Telegram; text piped in (e.g. log lines) is attached. |
 | `immob install-service` | Write systemd units for scheduled runs with failure alerts; see [Run on a server](#run-on-a-server). |
@@ -291,7 +291,9 @@ listings than were found, `inspect` the search page and look at its
 `Pagination:` line.
 
 Both sites' searches are read before notifications go out, so a flat listed on
-both is announced once (see below).
+both is announced once (see below). After seeding ImmoScout24 with
+`crawl --seed`, the flats only ImmoScout24 has can be sent once with
+`immob notify --resend --source immoscout24`.
 
 ## Gone listings and duplicates
 
