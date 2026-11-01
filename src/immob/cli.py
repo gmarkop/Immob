@@ -17,6 +17,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from immob.costs import purchase_costs
 from immob.filters import FilterProfile, load_profile
 from immob.http import PoliteClient, RobotsDisallowed
 from immob.models import Listing, StoredListing, format_eur
@@ -226,7 +227,7 @@ def notify(
             typer.confirm(f"Send {len(matches)} Telegram messages?", abort=True)
         with notifier:
             try:
-                sent = resend(store, notifier, matches)
+                sent = resend(store, notifier, matches, profile)
             except NotifierError as exc:
                 console.print(f"[red]{exc}[/red]")
                 raise typer.Exit(1) from None
@@ -343,10 +344,14 @@ def search(
     with Storage(db) as store:
         listings = current_matches(store, profile, max_age_days=max_age_days)
 
-    table = Table(title=f"{len(listings)} listings matching '{profile.name}'")
+    table = Table(
+        title=f"{len(listings)} listings matching '{profile.name}'",
+        caption="Total: price plus estimated purchase costs; * commission assumed",
+    )
     for column in (
         "ID",
         "Price",
+        "Total",
         "m²",
         "€/m²",
         "Rooms",
@@ -362,6 +367,7 @@ def search(
         table.add_row(
             f"[link={listing.url}]{listing.source_id}[/link]",
             format_eur(listing.price_eur),
+            _total(listing, profile),
             _num(listing.area_m2),
             _num(listing.price_per_m2 and round(listing.price_per_m2)),
             _num(listing.rooms),
@@ -491,6 +497,13 @@ def show(
     for label, other in [("Same flat as", original)] + [("Also listed as", c) for c in copies]:
         if other is not None:
             console.print(f"  {label:<20}{other.source} {other.source_id}: {other.url}")
+    if costs := purchase_costs(listing, profile.costs):
+        console.print("\n[bold]Purchase costs (estimate)[/bold]")
+        console.print(f"  {'Price':<28}{format_eur(costs.price):>12}")
+        for item in costs.items:
+            note = f"  ({item.note})" if item.note else ""
+            console.print(f"  {item.label:<28}{format_eur(item.amount):>12}{note}")
+        console.print(f"  {'Total':<28}{format_eur(costs.total):>12}", style="bold")
     if text:
         # The text the yes/no/? fields were extracted from (markup=False: ad
         # text may contain [brackets] that rich would read as formatting).
@@ -691,6 +704,14 @@ def _print_listing(listing: StoredListing) -> None:
 
 def _eur_cents(amount: float | None, note: str) -> str:
     return "?" if amount is None else f"{format_eur(amount, cents=True)} per month ({note})"
+
+
+def _total(listing: Listing, profile: FilterProfile) -> str:
+    """The estimated total purchase cost; "*" when the commission is assumed."""
+    costs = purchase_costs(listing, profile.costs)
+    if costs is None:
+        return "?"
+    return format_eur(costs.total) + ("*" if costs.commission_assumed else "")
 
 
 def _energy(listing: Listing) -> str:

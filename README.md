@@ -295,6 +295,24 @@ both is announced once (see below). After seeding ImmoScout24 with
 `crawl --seed`, the flats only ImmoScout24 has can be sent once with
 `immob notify --resend --source immoscout24`.
 
+## Total purchase cost
+
+Buying a flat in Austria costs roughly 10 % on top of the price. immob
+estimates the total for every listing and shows it in Telegram messages
+("Gesamtkosten ≈ € 164.890"), in the `Total` column of `immob search`, and
+itemized in `immob show`:
+
+| Cost | Default |
+|---|---|
+| Transfer tax (Grunderwerbsteuer) | 3.5 % |
+| Land registry (Grundbuch-Eintragungsgebühr) | 1.1 % |
+| Contract and trustee (notary or lawyer) | 1.5 % + 20 % VAT |
+| Agent's commission | as stated in the listing; if not stated, 3 % + VAT (marked "assumed" / `*`) |
+
+The percentages apply to the price plus a garage space that costs extra. They
+are estimates for comparing flats, not a quote: set your own rates in the
+profile's `costs:` section, and filter on the total with `total_cost_max`.
+
 ## Gone listings and duplicates
 
 **Gone.** After a crawl that read the whole search (`Seen 53 of 53`), listings

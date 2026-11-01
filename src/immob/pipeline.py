@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
+from immob.costs import purchase_costs
 from immob.dedup import find_original
 from immob.filters import FilterProfile
 from immob.models import StoredListing
@@ -116,7 +117,13 @@ def send_pending(
     pending = [listing for listing in store.pending_notifications() if profile.matches(listing)]
     sent = 0
     for listing in pending[:limit]:
-        notifier.send(format_listing(listing, also_on=store.duplicates_of(listing)))
+        notifier.send(
+            format_listing(
+                listing,
+                also_on=store.duplicates_of(listing),
+                purchase=purchase_costs(listing, profile.costs),
+            )
+        )
         store.mark_notified(listing)
         sent += 1
     return sent
@@ -145,9 +152,22 @@ def current_matches(
     ]
 
 
-def resend(store: Storage, notifier: TelegramNotifier, listings: list[StoredListing]) -> int:
+def resend(
+    store: Storage,
+    notifier: TelegramNotifier,
+    listings: list[StoredListing],
+    profile: FilterProfile | None = None,
+) -> int:
     """Send these listings again, whether or not they were notified before."""
+    settings = (profile or FilterProfile()).costs
     for listing in listings:
-        notifier.send(format_listing(listing, resent=True, also_on=store.duplicates_of(listing)))
+        notifier.send(
+            format_listing(
+                listing,
+                resent=True,
+                also_on=store.duplicates_of(listing),
+                purchase=purchase_costs(listing, settings),
+            )
+        )
         store.mark_notified(listing)
     return len(listings)

@@ -13,6 +13,7 @@ from html import escape
 
 import httpx
 
+from immob.costs import PurchaseCosts
 from immob.models import Listing, StoredListing, format_eur
 
 API_URL = "https://api.telegram.org"
@@ -83,12 +84,17 @@ class TelegramNotifier:
 
 
 def format_listing(
-    listing: StoredListing, *, resent: bool = False, also_on: Sequence[Listing] = ()
+    listing: StoredListing,
+    *,
+    resent: bool = False,
+    also_on: Sequence[Listing] = (),
+    purchase: PurchaseCosts | None = None,
 ) -> str:
     """One listing as a Telegram message (HTML subset; all ad text escaped).
 
     `resent` marks a listing sent again on request (`immob notify --resend`);
-    `also_on` are the same flat's listings on other sites.
+    `also_on` are the same flat's listings on other sites; `purchase` the estimated
+    total purchase cost.
     """
     old_price = listing.notified_price
     if resent:
@@ -133,10 +139,18 @@ def format_listing(
         features.insert(0, listing.building_type.value.capitalize())
 
     place = " ".join(filter(None, [listing.postal_code, listing.location]))
+    total = None
+    if purchase is not None:
+        total = (
+            f"Gesamtkosten ≈ {format_eur(purchase.total)} "
+            f"(+{format_eur(purchase.extra)} Nebenkosten"
+            + (", Provision geschätzt)" if purchase.commission_assumed else ")")
+        )
     lines = [
         headline,
         f'<a href="{escape(listing.url)}">{escape(listing.title)}</a>',
         escape(" · ".join(facts)),
+        escape(total or ""),
         escape(" · ".join(costs)),
         escape(place),
         escape(" · ".join(f for f in features if f)),

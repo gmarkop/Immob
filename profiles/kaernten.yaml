@@ -17,6 +17,16 @@ building_types: [neubau, altbau]   # Altbau = built before 1945
 # hwb_max: 100
 # energy_class_max: C
 
+# Purchase costs on top of the price, in percent: typical values, adjust them to
+# what your notary or lawyer quotes. Used for the total shown with each flat.
+costs:
+  transfer_tax_percent: 3.5       # Grunderwerbsteuer
+  land_registry_percent: 1.1      # Grundbuch-Eintragungsgebühr
+  contract_percent: 1.5           # contract and trustee, plus VAT
+  assumed_commission_percent: 3   # when a listing doesn't state it, plus VAT
+# Highest price plus purchase costs:
+# total_cost_max: 240000
+
 # Count a garage space that costs extra towards price_max:
 price_includes_garage: true
 # monthly_costs_max: 250    # €/month incl. VAT: operating costs, repair reserve, ...
