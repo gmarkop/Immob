@@ -10,6 +10,7 @@ import os
 import time
 from collections.abc import Callable, Sequence
 from html import escape
+from typing import Any
 
 import httpx
 
@@ -64,23 +65,105 @@ class TelegramNotifier:
     def __exit__(self, *exc: object) -> None:
         self._client.close()
 
-    def send(self, html_text: str) -> None:
-        payload = {"chat_id": self._chat_id, "text": html_text, "parse_mode": "HTML"}
-        # httpx's own exceptions include the request URL, i.e. the bot token. Replace
-        # them with a clean message, and "from None" drops the original from tracebacks.
+    @property
+    def chat_id(self) -> str:
+        return self._chat_id
+
+    def send(self, html_text: str, buttons: Buttons | None = None) -> None:
+        """Send a message to the chat, with optional buttons under it."""
+        payload: dict[str, Any] = {
+            "chat_id": self._chat_id,
+            "text": html_text,
+            "parse_mode": "HTML",
+        }
+        if buttons:
+            payload["reply_markup"] = {"inline_keyboard": buttons}
+        self._call("sendMessage", payload)
+        self._sleep(1)  # stay well under Telegram's limit of ~1 message/second per chat
+
+    def get_updates(self, offset: int | None, timeout: int = 50) -> list[dict[str, Any]]:
+        """Button presses since `offset`, waiting up to `timeout` seconds for one.
+
+        This is long polling: Telegram holds the request open and answers as soon
+        as something happens, so a loop around it reacts within a second.
+        """
+        payload: dict[str, Any] = {"timeout": timeout, "allowed_updates": ["callback_query"]}
+        if offset is not None:
+            payload["offset"] = offset
+        return self._call("getUpdates", payload, timeout=timeout + 15).get("result", [])
+
+    def answer_callback(self, callback_id: str, text: str = "") -> None:
+        """Acknowledge a button press: stops the spinner and shows `text` briefly."""
+        self._call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
+
+    def edit_buttons(self, chat_id: str | int, message_id: int, buttons: Buttons) -> None:
+        self._call(
+            "editMessageReplyMarkup",
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reply_markup": {"inline_keyboard": buttons},
+            },
+        )
+
+    def _call(
+        self, method: str, payload: dict[str, Any], *, timeout: float | None = None
+    ) -> dict[str, Any]:
+        """Call a Bot API method. Errors never contain the bot token.
+
+        httpx's own exceptions include the request URL, i.e. the token. They're
+        replaced by a clean message, and "from None" drops them from tracebacks.
+        """
+        options: dict[str, Any] = {"json": payload}
+        if timeout is not None:
+            options["timeout"] = timeout
         try:
-            response = self._client.post("/sendMessage", json=payload)
+            response = self._client.post(f"/{method}", **options)
             if response.status_code == 429:  # rate limited: Telegram says how long to wait
                 retry_after = response.json().get("parameters", {}).get("retry_after", 5)
                 self._sleep(retry_after)
-                response = self._client.post("/sendMessage", json=payload)
+                response = self._client.post(f"/{method}", **options)
             response.raise_for_status()
+            return response.json()
         except httpx.HTTPStatusError as exc:
             status, body = exc.response.status_code, exc.response.text
             raise TelegramError(f"Telegram answered HTTP {status}: {body}") from None
         except httpx.HTTPError as exc:
             raise TelegramError(f"could not reach Telegram ({type(exc).__name__})") from None
-        self._sleep(1)  # stay well under Telegram's limit of ~1 message/second per chat
+
+
+# Rows of inline buttons, as the Bot API expects them.
+Buttons = list[list[dict[str, str]]]
+
+
+def listing_buttons(listing: StoredListing) -> Buttons:
+    """The buttons under a listing's message, reflecting its current state.
+
+    callback_data carries the action and the listing's ref, e.g.
+    "fav:willhaben:858253157" (Telegram allows 64 bytes).
+    """
+    if listing.hidden_at:
+        return [[{"text": "↩️ Doch interessiert", "callback_data": f"unhide:{listing.ref}"}]]
+    favorite = (
+        {"text": "⭐ Gemerkt ✓", "callback_data": f"unfav:{listing.ref}"}
+        if listing.favorite_at
+        else {"text": "⭐ Merken", "callback_data": f"fav:{listing.ref}"}
+    )
+    return [[favorite, {"text": "🙈 Nicht interessiert", "callback_data": f"hide:{listing.ref}"}]]
+
+
+def format_gone(listing: StoredListing) -> str:
+    """A saved flat is no longer listed."""
+    place = " ".join(filter(None, [listing.postal_code, listing.location]))
+    facts = [f"zuletzt {format_eur(listing.price_eur)}", f"nach {listing.days_online} Tagen"]
+    return "\n".join(
+        [
+            "🚫 <b>Nicht mehr online</b> (gemerkt)",
+            f'<a href="{escape(listing.url)}">{escape(listing.title)}</a>',
+            escape(" · ".join(facts)),
+            escape(place),
+        ]
+    )
 
 
 def format_listing(

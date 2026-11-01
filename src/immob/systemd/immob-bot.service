@@ -1,0 +1,14 @@
+# Written by `immob install-service`, which fills in the paths and schedule.
+[Unit]
+Description=immob: react to Telegram buttons (Merken / Nicht interessiert)
+
+[Service]
+WorkingDirectory=${workdir}
+EnvironmentFile=%h/.config/immob.env
+ExecStart=${exec} bot
+# A long-running loop: restart it if it ever stops (e.g. no network at boot).
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

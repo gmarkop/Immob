@@ -1,5 +1,6 @@
 """The crawl and notification steps together, with a fake source."""
 
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
@@ -192,3 +193,60 @@ def test_same_flat_on_second_site_is_linked_not_announced(store):
     # The willhaben listing goes; the flat is still on ImmoScout24.
     store.mark_gone("willhaben", seen_ids=set())
     assert [m.ref for m in current_matches(store, FilterProfile())] == ["immoscout24:a"]
+
+
+def _recording_notifier(sent: list) -> TelegramNotifier:
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True})
+
+    return TelegramNotifier("t", "1", transport=httpx.MockTransport(handler), sleep=lambda _: None)
+
+
+def test_messages_carry_buttons(store):
+    store.upsert(make("a", 150000))
+    sent = []
+    send_pending(store, FilterProfile(), _recording_notifier(sent))
+    buttons = sent[0]["reply_markup"]["inline_keyboard"][0]
+    assert [b["callback_data"] for b in buttons] == ["fav:fake:a", "hide:fake:a"]
+    assert "Gesamtkosten" in sent[0]["text"]
+
+
+def test_hidden_flats_are_left_out(store):
+    store.upsert(make("a", 150000))
+    store.upsert(make("b", 150000))
+    store.set_hidden(make("a", 150000), True)
+
+    assert [m.source_id for m in current_matches(store, FilterProfile())] == ["b"]
+    sent = []
+    assert send_pending(store, FilterProfile(), _recording_notifier(sent)) == 1
+    assert "x/b" in sent[0]["text"]
+
+
+def test_saved_flat_price_drop_is_sent_even_if_profile_changed(store):
+    store.upsert(make("a", 150000))
+    store.mark_all_notified()
+    store.set_favorite(make("a", 150000), True)
+    store.upsert(make("a", 140000))  # price drop
+
+    sent = []
+    strict = FilterProfile(price_max=100000)  # no longer matches
+    assert send_pending(store, strict, _recording_notifier(sent)) == 1
+    assert "Price drop" in sent[0]["text"]
+
+
+def test_saved_flat_going_offline_is_reported_once(store):
+    store.upsert(make("a", 150000))
+    store.mark_all_notified()
+    store.set_favorite(make("a", 150000), True)
+    store.mark_gone("fake", seen_ids=set())
+
+    sent = []
+    notifier = _recording_notifier(sent)
+    assert send_pending(store, FilterProfile(), notifier) == 1
+    assert sent[0]["text"].startswith("🚫 <b>Nicht mehr online</b>")
+    assert "reply_markup" not in sent[0]
+    assert send_pending(store, FilterProfile(), notifier) == 0  # not again
+
+    store.upsert(make("a", 150000))  # listed again: a later disappearance counts anew
+    assert store.get("fake", "a").gone_notified_at is None

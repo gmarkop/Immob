@@ -186,6 +186,8 @@ cd ~/immob && immob install-service
   `--calendar "*-*-* 08,18:00"` (systemd's
   [OnCalendar](https://www.freedesktop.org/software/systemd/man/latest/systemd.time.html#Calendar%20Events)
   syntax).
+- `immob-bot.service` keeps `immob bot` running for the Telegram buttons;
+  enable it with `systemctl --user enable --now immob-bot.service`.
 - `immob-failure.service` runs when a crawl fails (including when willhaben's
   pages change and the search can't be read) and sends a Telegram alert with
   the last log lines. Without it, a broken crawler and a quiet market both look
@@ -230,6 +232,8 @@ After an update that changes the unit files, run `immob install-service` and
 | `immob crawl` | Fetch listings, store them, send notifications. `--seed` for the first run, `--no-notify` to skip Telegram, `--pages N`, `--no-details`, `--refresh-details` to re-read detail pages after an update, `--cache-dir DIR` while developing. |
 | `immob search` | Table of stored listings that match the profile. |
 | `immob duplicates` | Flats listed on more than one site, with each listing's link; flags price differences between sites. `--unlink REF` undoes a wrong match. |
+| `immob favorites` | Your saved flats (⭐ in Telegram), with total cost and whether they're still listed. |
+| `immob bot` | Handles the Telegram buttons; runs as `immob-bot.service`. |
 | `immob gone` | Listings that left the search in the last 30 days (`--days N`): how long they were online, price changes, last price. `--all` includes listings that don't match the profile. |
 | `immob show ID` | One listing with price history and the filter verdict. `--text` also prints the ad's text, to see where yes/no/? values came from. |
 | `immob notify` | Send pending notifications without crawling. `--resend` sends all current matches again, e.g. after changing the profile (asks first if there are more than 10); `--source immoscout24` limits it to one site. |
@@ -294,6 +298,30 @@ Both sites' searches are read before notifications go out, so a flat listed on
 both is announced once (see below). After seeding ImmoScout24 with
 `crawl --seed`, the flats only ImmoScout24 has can be sent once with
 `immob notify --resend --source immoscout24`.
+
+## Telegram buttons: save or hide
+
+Every listing message has two buttons:
+
+- **⭐ Merken** saves the flat to your shortlist (`immob favorites`). Its
+  price drops are always sent, even if you change the profile later, and you
+  get a "🚫 Nicht mehr online" message when it disappears.
+- **🙈 Nicht interessiert** hides the flat for good: no more messages, and
+  it's left out of `immob search` and `notify --resend`. The button then
+  changes to **↩️ Doch interessiert**, which undoes it.
+
+Both apply to the whole flat, including its copy on the other site. The
+buttons are handled by `immob bot`, which waits for presses and applies them
+immediately. On a server, `immob install-service` writes `immob-bot.service`
+for it:
+
+```bash
+systemctl --user daemon-reload && systemctl --user enable --now immob-bot.service
+```
+
+Only presses from your own chat (`TELEGRAM_CHAT_ID`) count. Telegram keeps
+presses for 24 hours, so a press while the bot is stopped is applied when it
+starts again.
 
 ## Total purchase cost
 

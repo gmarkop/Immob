@@ -17,6 +17,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from immob.bot import run_bot
 from immob.costs import purchase_costs
 from immob.filters import FilterProfile, load_profile
 from immob.http import PoliteClient, RobotsDisallowed
@@ -279,7 +280,7 @@ def alert(
         raise typer.Exit(1) from None
 
 
-UNIT_FILES = ("immob.service", "immob.timer", "immob-failure.service")
+UNIT_FILES = ("immob.service", "immob.timer", "immob-failure.service", "immob-bot.service")
 
 
 @app.command("install-service")
@@ -325,6 +326,7 @@ def install_service(
         "  sudo loginctl enable-linger $USER     # run timers while you're logged out\n"
         "  systemctl --user daemon-reload\n"
         "  systemctl --user enable --now immob.timer\n"
+        "  systemctl --user enable --now immob-bot.service  # Telegram buttons\n"
         "  systemctl --user start immob.service  # one run now, to test",
         markup=False,
         highlight=False,
@@ -365,7 +367,8 @@ def search(
     table.add_column("Place", overflow="ellipsis", no_wrap=True)  # the one column that may shrink
     for listing in listings:
         table.add_row(
-            f"[link={listing.url}]{listing.source_id}[/link]",
+            ("⭐ " if listing.favorite_at else "")
+            + f"[link={listing.url}]{listing.source_id}[/link]",
             format_eur(listing.price_eur),
             _total(listing, profile),
             _num(listing.area_m2),
@@ -376,6 +379,51 @@ def search(
             listing.building_type or "?",
             listing.garage_display,
             _yes_no(None if listing.commission_free is None else not listing.commission_free),
+            " ".join(filter(None, [listing.postal_code, listing.location])),
+        )
+    console.print(table)
+
+
+@app.command()
+def bot(db: DbOption = DEFAULT_DB) -> None:
+    """React to the Telegram buttons (⭐ Merken / 🙈 Nicht interessiert) until stopped.
+
+    Runs as the immob-bot systemd service (see `immob install-service`).
+    """
+    try:
+        notifier = TelegramNotifier.from_env()
+    except NotifierError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+    logging.getLogger("immob").setLevel(logging.INFO)
+    console.print("Listening for Telegram button presses (Ctrl+C to stop).")
+    with notifier:
+        try:
+            run_bot(db, notifier)
+        except KeyboardInterrupt:
+            console.print("Stopped.")
+
+
+@app.command()
+def favorites(profile_path: ProfileOption = DEFAULT_PROFILE, db: DbOption = DEFAULT_DB) -> None:
+    """Your saved flats (⭐ Merken in Telegram), with total cost and whether still listed."""
+    profile = _load_profile(profile_path)
+    with Storage(db) as store:
+        saved = store.favorites()
+
+    table = Table(title=f"{len(saved)} saved flats")
+    for column in ("ID", "Price", "Total", "m²", "Rooms", "Status"):
+        table.add_column(column, no_wrap=True)
+    table.add_column("Place", overflow="ellipsis", no_wrap=True)
+    for listing in saved:
+        status = f"gone {listing.gone_at:%Y-%m-%d}" if listing.gone_at else "listed"
+        table.add_row(
+            f"[link={listing.url}]{listing.source_id}[/link]",
+            format_eur(listing.price_eur),
+            _total(listing, profile),
+            _num(listing.area_m2),
+            _num(listing.rooms),
+            status,
             " ".join(filter(None, [listing.postal_code, listing.location])),
         )
     console.print(table)
@@ -696,6 +744,8 @@ def _print_listing(listing: StoredListing) -> None:
         "First seen": f"{listing.first_seen:%Y-%m-%d}",
         "Last seen": f"{listing.last_seen:%Y-%m-%d}",
         "Gone": f"{listing.gone_at:%Y-%m-%d}" if listing.gone_at else "no, still listed",
+        "Saved (⭐)": f"since {listing.favorite_at:%Y-%m-%d}" if listing.favorite_at else "no",
+        "Not interested": f"since {listing.hidden_at:%Y-%m-%d}" if listing.hidden_at else "no",
         "Detail page parsed": _yes_no(listing.details_fetched),
     }
     for label, value in fields.items():
