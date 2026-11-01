@@ -142,6 +142,11 @@ class StoredListing(Listing):
     gone_at: datetime | None = None
     # The `ref` of the same flat listed earlier on another site.
     duplicate_of: str | None = None
+    # Set with the Telegram buttons: saved to the shortlist, or not interesting.
+    favorite_at: datetime | None = None
+    hidden_at: datetime | None = None
+    # When a favourite's "no longer online" message was sent.
+    gone_notified_at: datetime | None = None
 
     @property
     def days_online(self) -> int:

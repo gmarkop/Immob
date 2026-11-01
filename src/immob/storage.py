@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS listings (
     notified_price  INTEGER,
     notified_at     TEXT,
     gone_at         TEXT,
+    favorite_at     TEXT,
+    hidden_at       TEXT,
+    gone_notified_at TEXT,
     duplicate_of    TEXT,
     PRIMARY KEY (source, source_id)
 );
@@ -79,6 +82,9 @@ _ADDED_COLUMNS = {
     "energy_class": "TEXT",
     "gone_at": "TEXT",
     "duplicate_of": "TEXT",
+    "favorite_at": "TEXT",
+    "hidden_at": "TEXT",
+    "gone_notified_at": "TEXT",
 }
 
 # Listing fields stored as plain columns. Column names come from our own model,
@@ -170,7 +176,8 @@ class Storage:
                 f"UPDATE listings SET {assignments}, "
                 "details_fetched = MAX(?, details_fetched), "
                 # Seen again, so not gone (any more).
-                "raw_json = COALESCE(?, raw_json), last_seen = ?, gone_at = NULL "
+                "raw_json = COALESCE(?, raw_json), last_seen = ?, "
+                "gone_at = NULL, gone_notified_at = NULL "
                 "WHERE source = ? AND source_id = ?",
                 [*data, listing.details_fetched, raw_json, now.isoformat(), *listing.key],
             )
@@ -285,13 +292,64 @@ class Storage:
         return [_to_listing(row) for row in rows]
 
     def pending_notifications(self) -> list[StoredListing]:
-        """Listings never notified about, or whose price dropped since then."""
+        """Listings never notified about, or whose price dropped since then.
+
+        Listings marked "not interested" are left out.
+        """
         rows = self._conn.execute(
             "SELECT * FROM listings "
-            "WHERE notified_at IS NULL OR price_eur < notified_price "
+            "WHERE (notified_at IS NULL OR price_eur < notified_price) AND hidden_at IS NULL "
             "ORDER BY first_seen"
         ).fetchall()
         return [_to_listing(row) for row in rows]
+
+    # --- favourites and hidden flats (the Telegram buttons) -------------------
+
+    def flat_group(self, listing: Listing) -> list[StoredListing]:
+        """The flat's listings on every site: the original and its copies."""
+        stored = self.get(*listing.key)
+        if stored is None:
+            return []
+        original = (self.get_ref(stored.duplicate_of) if stored.duplicate_of else None) or stored
+        return [original, *self.duplicates_of(original)]
+
+    def set_favorite(self, listing: Listing, on: bool, now: datetime | None = None) -> None:
+        self._set_flat_flag("favorite_at", listing, on, now)
+
+    def set_hidden(self, listing: Listing, on: bool, now: datetime | None = None) -> None:
+        self._set_flat_flag("hidden_at", listing, on, now)
+
+    def _set_flat_flag(self, column: str, listing: Listing, on: bool, now: datetime | None) -> None:
+        # A flat listed on two sites is one flat: the flag goes on all its listings.
+        value = (now or _now()).isoformat() if on else None
+        with self._conn:
+            self._conn.executemany(
+                f"UPDATE listings SET {column} = ? WHERE source = ? AND source_id = ?",
+                [(value, *member.key) for member in self.flat_group(listing)],
+            )
+
+    def favorites(self) -> list[StoredListing]:
+        """Saved flats, one listing per flat (the original), newest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM listings WHERE favorite_at IS NOT NULL AND duplicate_of IS NULL "
+            "ORDER BY favorite_at DESC"
+        ).fetchall()
+        return [_to_listing(row) for row in rows]
+
+    def pending_gone_notifications(self) -> list[StoredListing]:
+        """Favourites that went offline and haven't been reported yet."""
+        rows = self._conn.execute(
+            "SELECT * FROM listings WHERE favorite_at IS NOT NULL AND gone_at IS NOT NULL "
+            "AND gone_notified_at IS NULL AND hidden_at IS NULL"
+        ).fetchall()
+        return [_to_listing(row) for row in rows]
+
+    def mark_gone_notified(self, listing: Listing, now: datetime | None = None) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE listings SET gone_notified_at = ? WHERE source = ? AND source_id = ?",
+                [(now or _now()).isoformat(), *listing.key],
+            )
 
     def price_history(self, source: str, source_id: str) -> list[tuple[datetime, int | None]]:
         rows = self._conn.execute(

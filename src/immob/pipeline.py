@@ -8,10 +8,11 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
+from immob.costs import purchase_costs
 from immob.dedup import find_original
 from immob.filters import FilterProfile
 from immob.models import StoredListing
-from immob.notify import TelegramNotifier, format_listing
+from immob.notify import TelegramNotifier, format_gone, format_listing, listing_buttons
 from immob.sources.base import ParseError, Source
 from immob.storage import Change, Storage
 
@@ -107,16 +108,34 @@ def run_crawl(
 def send_pending(
     store: Storage, profile: FilterProfile, notifier: TelegramNotifier, *, limit: int = 20
 ) -> int:
-    """Notify about new matching listings and price drops. Returns messages sent.
+    """Notify about new matching listings, price drops, and saved flats that went
+    offline. Returns messages sent.
 
     A listing is marked as notified only after its message went out, so a
     Telegram outage just delays the notification to the next run. Anything over
     `limit` also waits for the next run.
     """
-    pending = [listing for listing in store.pending_notifications() if profile.matches(listing)]
     sent = 0
-    for listing in pending[:limit]:
-        notifier.send(format_listing(listing, also_on=store.duplicates_of(listing)))
+    for listing in store.pending_gone_notifications()[:limit]:
+        notifier.send(format_gone(listing))
+        store.mark_gone_notified(listing)
+        sent += 1
+
+    # A saved flat's price drops always count, even after the profile changed.
+    pending = [
+        listing
+        for listing in store.pending_notifications()
+        if profile.matches(listing) or listing.favorite_at
+    ]
+    for listing in pending[: max(limit - sent, 0)]:
+        notifier.send(
+            format_listing(
+                listing,
+                also_on=store.duplicates_of(listing),
+                purchase=purchase_costs(listing, profile.costs),
+            ),
+            buttons=listing_buttons(listing),
+        )
         store.mark_notified(listing)
         sent += 1
     return sent
@@ -128,8 +147,9 @@ def current_matches(
     """Stored listings that match the profile, cheapest first, one per flat.
 
     Left out: listings that are gone or haven't been seen for `max_age_days`
-    (most likely sold), and copies of a flat whose original listing is still
-    active. When the original is gone, the copy on the other site takes over.
+    (most likely sold), flats marked "not interested", and copies of a flat
+    whose original listing is still active. When the original is gone, the copy
+    on the other site takes over.
     """
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
     listings = store.all()
@@ -141,13 +161,30 @@ def current_matches(
     return [
         listing
         for listing in listings
-        if listing.ref in active and listing.duplicate_of not in active and profile.matches(listing)
+        if listing.ref in active
+        and listing.duplicate_of not in active
+        and listing.hidden_at is None
+        and profile.matches(listing)
     ]
 
 
-def resend(store: Storage, notifier: TelegramNotifier, listings: list[StoredListing]) -> int:
+def resend(
+    store: Storage,
+    notifier: TelegramNotifier,
+    listings: list[StoredListing],
+    profile: FilterProfile | None = None,
+) -> int:
     """Send these listings again, whether or not they were notified before."""
+    settings = (profile or FilterProfile()).costs
     for listing in listings:
-        notifier.send(format_listing(listing, resent=True, also_on=store.duplicates_of(listing)))
+        notifier.send(
+            format_listing(
+                listing,
+                resent=True,
+                also_on=store.duplicates_of(listing),
+                purchase=purchase_costs(listing, settings),
+            ),
+            buttons=listing_buttons(listing),
+        )
         store.mark_notified(listing)
     return len(listings)

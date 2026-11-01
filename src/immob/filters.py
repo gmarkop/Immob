@@ -11,6 +11,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from immob.costs import CostSettings, purchase_costs
 from immob.models import ENERGY_CLASSES, BuildingType, Listing
 
 # "required": must have it, "excluded": must not have it, "any": don't care.
@@ -64,6 +65,8 @@ class FilterProfile(BaseModel):
     # Count a garage space that costs extra ("Tiefgaragenplatz um € 18.000")
     # towards price_min/price_max.
     price_includes_garage: bool = False
+    # Price plus estimated purchase costs (taxes, fees, commission); see `costs`.
+    total_cost_max: float | None = None
     monthly_costs_max: float | None = None
     area_min: float | None = None
     area_max: float | None = None
@@ -92,6 +95,7 @@ class FilterProfile(BaseModel):
 
     willhaben: WillhabenSettings = WillhabenSettings()
     immoscout24: ImmoScout24Settings = ImmoScout24Settings()
+    costs: CostSettings = CostSettings()
 
     @field_validator("energy_class_max")
     @classmethod
@@ -133,6 +137,10 @@ class FilterProfile(BaseModel):
         price = listing.total_price_eur if self.price_includes_garage else listing.price_eur
         check_range("price", price, self.price_min, self.price_max)
         check_range("monthly costs", listing.monthly_costs_eur, None, self.monthly_costs_max)
+        if self.total_cost_max is not None:
+            costs = purchase_costs(listing, self.costs)
+            total = float(costs.total) if costs else None
+            check_range("total cost", total, None, self.total_cost_max)
         check_range("area", listing.area_m2, self.area_min, self.area_max)
         check_range("rooms", listing.rooms, self.rooms_min, self.rooms_max)
         check_range("floor", listing.floor, self.floor_min, self.floor_max)

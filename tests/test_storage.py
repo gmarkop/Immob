@@ -153,3 +153,18 @@ def test_duplicate_groups_and_unlink(store):
     store.unlink_duplicate(copy)
     assert store.duplicate_groups() == []
     assert store.get("immoscout24", "a").duplicate_of is None
+
+
+def test_favorites_list_one_listing_per_flat(store):
+    original = listing("1", area_m2=54)
+    copy = Listing(source="immoscout24", source_id="a", url="u", title="t", area_m2=54)
+    store.upsert(original)
+    store.upsert(copy)
+    store.set_duplicate_of(copy, original)
+
+    store.set_favorite(copy, True)  # pressed on the copy's message
+
+    assert [f.ref for f in store.favorites()] == ["willhaben:1"]
+    assert store.get("willhaben", "1").favorite_at is not None
+    store.set_favorite(original, False)
+    assert store.favorites() == []

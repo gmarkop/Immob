@@ -397,3 +397,28 @@ def test_source_needs_resend_and_a_known_site(monkeypatch, tmp_path):
     assert result.exit_code == 1 and "only works together with --resend" in result.output
     result = CliRunner().invoke(cli.app, ["notify", "--resend", "--source", "derstandard"])
     assert result.exit_code == 1 and "Unknown site" in result.output
+
+
+def test_favorites_command(monkeypatch, tmp_path):
+    db = str(tmp_path / "test.db")
+    monkeypatch.setenv("IMMOB_DB", db)
+    _linked_pair(db)
+    with Storage(db) as store:
+        store.set_favorite(store.get("willhaben", "1"), True)
+
+    result = CliRunner().invoke(cli.app, ["favorites"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 saved flats" in result.output
+    assert "listed" in result.output
+
+
+def test_install_service_writes_bot_unit(tmp_path):
+    units = tmp_path / "units"
+    CliRunner().invoke(
+        cli.app, ["install-service", "--data-dir", str(tmp_path), "--unit-dir", str(units)]
+    )
+    bot_unit = (units / "immob-bot.service").read_text()
+    assert bot_unit.rstrip().endswith("WantedBy=default.target")
+    assert "Restart=always" in bot_unit
+    assert " bot" in bot_unit and "${" not in bot_unit
